@@ -6,7 +6,6 @@ require('dotenv').config();
 // --- Configuration ---
 const PREFIX = '!';
 const EVENT_ROLE_NAME = 'Eventek'; // Changed to a single role name
-const port = process.env.PORT || 8000; // Added port for Heroku compatibility
 // Removed individual event role names
 
 // Define the events and their command names.  Role name is now a constant.
@@ -226,6 +225,7 @@ client.on('messageCreate', async (message) => {
 // --- Login ---
 const token = process.env.DISCORD_TOKEN;
 const dbUrl = process.env.DATABASE_URL;
+const port = process.env.PORT || 8080; // Default to 8080 if PORT is not set
 
 if (!token) {
     console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
@@ -236,8 +236,17 @@ if (!dbUrl) {
     process.exit(1);
 }
 
+// Listen on the port.  This is crucial for Render.
 client.login(token).then(() => {
     console.log(`Successfully logged in and listening on port ${port}`);
+    // You might need to start a web server here, depending on your needs
+    // For example, if you want a simple server to respond to Render's health checks:
+    const http = require('http');
+    http.createServer((req, res) => {
+      res.writeHead(200);
+      res.end('OK');
+    }).listen(port);
+
 }).catch(error => {
     console.error("FATAL ERROR: Failed to login to Discord:", error);
     process.exit(1);
