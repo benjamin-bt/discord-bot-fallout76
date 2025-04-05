@@ -236,7 +236,9 @@ if (!dbUrl) {
     process.exit(1);
 }
 
-client.login(token).catch(error => {
+client.login(token).then(() => {
+    console.log(`Successfully logged in and listening on port ${port}`);
+}).catch(error => {
     console.error("FATAL ERROR: Failed to login to Discord:", error);
     process.exit(1);
 });
