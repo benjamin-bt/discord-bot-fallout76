@@ -6,6 +6,7 @@ require('dotenv').config();
 // --- Configuration ---
 const PREFIX = '!';
 const EVENT_ROLE_NAME = 'Eventek'; // Changed to a single role name
+const port = process.env.PORT || 8000; // Added port for Heroku compatibility
 // Removed individual event role names
 
 // Define the events and their command names.  Role name is now a constant.
