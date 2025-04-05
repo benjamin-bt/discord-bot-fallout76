@@ -13,6 +13,34 @@ const EVENTS_CONFIG = {
     'sand': { eventName: "Line In The Sand", roleName: "Sand" },
     'eviction': { eventName: "Eviction Notice", roleName: "Eviction" },
     'queen': { eventName: "Scorched Earth", roleName: "Queen" },
+    'colossal': { eventName: "Colossal Problem", roleName: "Colossal" },
+    'neuro': { eventName: "Neurological Warfare", roleName: "Neuro" },
+    'seismic': { eventName: "Seismic Activity", roleName: "Seismic" },
+    'burden': { eventName: "Beasts of Burden", roleName: "Burden" },
+    'campfire': { eventName: "Campfire Tales", roleName: "Campfire" },
+    'caravan': { eventName: "Caravan Skyline Drive", roleName: "Caravan" },
+    'pastimes': { eventName: "Dangerous Pastimes", roleName: "Pastimes" },
+    'guests': { eventName: "Distuingished Guests", roleName: "Guests" },
+    'encryptid': { eventName: "Encryptid", roleName: "Encryptid" },
+    'eviction': { eventName: "Eviction Notice", roleName: "Eviction" },
+    'feed': { eventName: "Feed the People", roleName: "Feed" },
+    'range': { eventName: "Free Range", roleName: "Range" },
+    'meditation': { eventName: "Guided Meditation", roleName: "Meditation" },
+    'swamp': { eventName: "Heart of the Swamp", roleName: "Swamp" },
+    'jail': { eventName: "Jail Break", roleName: "Jail" },
+    'lode': { eventName: "Lode Baring", roleName: "Lode" },
+    'jamboree': { eventName: "Moonshine Jamboree", roleName: "Jamboree" },
+    'mostwanted': { eventName: "Most Wanted", roleName: "Wanted" },
+    'violent': { eventName: "One Violent Night", roleName: "Violent" },
+    'paradise': { eventName: "Project Paradise", roleName: "Paradise" },
+    'safe': { eventName: "Safe and Sound", roleName: "Safe" },
+    'spin': { eventName: "Spin The Wheel", roleName: "Spin" },
+    'swarm': { eventName: "Swarm of Suitors", roleName: "Swarm" },
+    'teatime': { eventName: "Tea Time", roleName: "Tea" },
+    'metal': { eventName: "Test Your Metal", roleName: "Metal" },
+    'path': { eventName: "The Path to Enlightenment", roleName: "Path" },
+    'love': { eventName: "The Tunnel of Love", roleName: "Love" },
+    'fever': { eventName: "Uranium Fever", roleName: "Fever" },
     // --- Template for adding new events ---
     /*
     'neweventcommand': { // This is the command users will type (e.g., !neweventcommand)
@@ -24,15 +52,12 @@ const EVENTS_CONFIG = {
 
 // --- Database Setup ---
 // Create a connection pool using the DATABASE_URL environment variable
-// This URL should be available in your deployment environment (e.g., Render)
-// or in your local .env file for development.
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    // SSL might be required depending on your database provider (Render requires it)
-    // The connection string usually handles this, but you can configure explicitly if needed:
-    // ssl: {
-    //   rejectUnauthorized: false // Adjust based on your provider/setup
-    // }
+    // Add SSL configuration needed for local development connecting to cloud DBs like Render
+    ssl: {
+      rejectUnauthorized: false // Adjust based on your provider/setup if needed
+    }
 });
 
 // Optional: Event listener for database connection errors on idle clients
@@ -47,9 +72,6 @@ async function ensureTableExists() {
     const client = await pool.connect();
     try {
         // SQL command to create the table 'user_igns' if it doesn't exist.
-        // user_id: Stores the Discord User ID as text (VARCHAR/TEXT). It's the PRIMARY KEY.
-        // ign: Stores the In-Game Name as text, cannot be null.
-        // last_updated: Optional timestamp automatically updated on insert/update.
         const createTableQuery = `
             CREATE TABLE IF NOT EXISTS user_igns (
                 user_id TEXT PRIMARY KEY,
@@ -117,9 +139,6 @@ client.on('messageCreate', async (message) => {
         }
 
         // SQL query using INSERT ... ON CONFLICT (UPSERT)
-        // If user_id already exists, it updates the ign and last_updated timestamp.
-        // Otherwise, it inserts a new row.
-        // Uses parameterized queries ($1, $2) to prevent SQL injection.
         const query = `
             INSERT INTO user_igns (user_id, ign)
             VALUES ($1, $2)
@@ -143,7 +162,6 @@ client.on('messageCreate', async (message) => {
     // !myign command
     else if (command === 'myign') {
         // SQL query to select the IGN for the specific user_id.
-        // Uses a parameterized query ($1).
         const query = 'SELECT ign FROM user_igns WHERE user_id = $1;';
         const values = [userId]; // Parameter for the query
 
@@ -163,6 +181,31 @@ client.on('messageCreate', async (message) => {
         } catch (err) {
             console.error("Database Error during !myign:", err);
             return message.reply("❌ An error occurred while retrieving your IGN. Please try again later.");
+        }
+    }
+
+    // !removeign command - NEW COMMAND
+    else if (command === 'removeign') {
+        // SQL query to delete the row matching the user's ID.
+        // Uses a parameterized query ($1).
+        const query = 'DELETE FROM user_igns WHERE user_id = $1;';
+        const values = [userId]; // Parameter for the query
+
+        try {
+            // Execute the delete query
+            const result = await pool.query(query, values);
+
+            // Check if any rows were affected (i.e., if a record was actually deleted)
+            if (result.rowCount > 0) {
+                console.log(`Database: Removed IGN for ${message.author.tag}`);
+                return message.reply("✅ Your registered IGN has been removed.");
+            } else {
+                // No rows deleted, meaning the user didn't have an IGN registered
+                return message.reply("You don't currently have an IGN registered to remove.");
+            }
+        } catch (err) {
+            console.error("Database Error during !removeign:", err);
+            return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
         }
     }
 
@@ -191,28 +234,20 @@ client.on('messageCreate', async (message) => {
         }
         // --- End Fetch User's IGN ---
 
-        // If we reached here, userIGN contains the registered IGN.
-
-        // Find the role on the server (case-insensitive search for robustness)
+        // Find the role on the server
         const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === roleName.toLowerCase());
 
         if (!role) {
              console.error(`Configuration Error: Role "${roleName}" not found on server "${message.guild.name}" for command "!${command}"`);
-             // Inform user the specific role is missing
              return message.reply(`❌ Error: The role "@${roleName}" was not found on this server. Please ask an admin to check the role name in the bot's configuration or create the role.`);
         }
 
-        // Construct and send the notification using the fetched IGN
-        // Using <@&ROLE_ID> ensures the role is pinged correctly
-        const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
+        // Construct and send the notification
+        const notification = `Attention, @Eventek! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
 
         try {
             await message.channel.send(notification);
             console.log(`Sent notification for ${eventName} triggered by ${message.author.tag}`);
-            // Optional: Delete the user's command message after success
-            // if (message.deletable) {
-            //     await message.delete().catch(console.error); // Catch potential permission errors
-            // }
         } catch (error) {
             console.error(`Discord API Error sending event notification for ${eventName}:`, error);
             message.reply("❌ Sorry, I couldn't send the notification message. Please check my permissions in this channel.");
@@ -223,7 +258,7 @@ client.on('messageCreate', async (message) => {
 
     // Optional: Handle unknown commands
     // else {
-    //     message.reply(`Unknown command: \`${PREFIX}${command}\`. Try \`!addign\`, \`!myign\`, or an event command like \`!rumble\`.`);
+    //     message.reply(`Unknown command: \`${PREFIX}${command}\`. Try \`!addign\`, \`!myign\`, \`!removeign\`, or an event command like \`!rumble\`.`);
     // }
 
 });
