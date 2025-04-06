@@ -1,14 +1,12 @@
 // Import necessary modules
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
+const fetch = require('node-fetch'); // Added for keep-alive pings
 require('dotenv').config();
 
 // --- Configuration ---
 const PREFIX = '!';
-const EVENT_ROLE_NAME = 'Eventek'; // Changed to a single role name
-// Removed individual event role names
-
-// Define the events and their command names.  Role name is now a constant.
+const EVENT_ROLE_NAME = 'Eventek';
 const EVENTS_CONFIG = {
     'rumble': { eventName: "Radiation Rumble" },
     'sand': { eventName: "Line In The Sand" },
@@ -41,12 +39,6 @@ const EVENTS_CONFIG = {
     'path': { eventName: "The Path to Enlightenment" },
     'love': { eventName: "The Tunnel of Love" },
     'fever': { eventName: "Uranium Fever" },
-    // --- Template for adding new events ---
-    /*
-    'neweventcommand': {
-        eventName: "Full Name of the New Event",
-    },
-    */
 };
 
 // --- Database Setup ---
@@ -103,6 +95,8 @@ client.on('ready', async () => {
         console.error("Error during bot readiness routine:", error);
         process.exit(1);
     }
+    // Start the keep-alive function
+    keepAlive();
 });
 
 client.on('messageCreate', async (message) => {
@@ -222,10 +216,26 @@ client.on('messageCreate', async (message) => {
     // }
 });
 
+// --- Keep-Alive Function ---
+function keepAlive() {
+    const url = process.env.RENDER_EXTERNAL_URL;  // Get the Render URL from the environment
+    if (url) {
+        console.log(`Setting up keep-alive pings to ${url}`);
+        setInterval(() => {
+            fetch(url)
+                .then(() => console.log(`Pinged ${url} to keep server alive`))
+                .catch(err => console.error(`Error pinging ${url}:`, err));
+        }, 5 * 60 * 1000); // Ping every 5 minutes (in milliseconds)
+    } else {
+        console.warn('RENDER_EXTERNAL_URL is not set.  Keep-alive pings are disabled.');
+    }
+}
+
+
 // --- Login ---
 const token = process.env.DISCORD_TOKEN;
 const dbUrl = process.env.DATABASE_URL;
-const port = process.env.PORT || 8080; // Default to 8080 if PORT is not set
+const port = process.env.PORT || 8080;
 
 if (!token) {
     console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
@@ -236,17 +246,13 @@ if (!dbUrl) {
     process.exit(1);
 }
 
-// Listen on the port.  This is crucial for Render.
 client.login(token).then(() => {
     console.log(`Successfully logged in and listening on port ${port}`);
-    // You might need to start a web server here, depending on your needs
-    // For example, if you want a simple server to respond to Render's health checks:
     const http = require('http');
     http.createServer((req, res) => {
-      res.writeHead(200);
-      res.end('OK');
+        res.writeHead(200);
+        res.end('OK');
     }).listen(port);
-
 }).catch(error => {
     console.error("FATAL ERROR: Failed to login to Discord:", error);
     process.exit(1);
