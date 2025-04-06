@@ -1,7 +1,7 @@
 // Import necessary modules
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
-const fetch = require('node-fetch'); // Added for keep-alive pings
+import fetch from 'node-fetch'; // Added for keep-alive pings
 require('dotenv').config();
 
 // --- Configuration ---
