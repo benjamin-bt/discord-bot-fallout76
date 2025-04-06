@@ -210,8 +210,8 @@ client.on('messageCreate', async (message) => {
             return message.reply(`❌ Hiba: A "${EVENT_ROLE_NAME}" szerepkör nem található ezen a szerveren. Kérlek kérdezd meg az adminisztrátort, hogy ellenőrizze a szerepkör nevét a bot konfigurációjában, vagy hozza létre a szerepkört.`);
         }
 
-        const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
-        // const notification = `Figyelem, <@&${role.id}>! ${message.author} ${eventName} eseménye aktív a szerverén!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzájuk!`;
+        //const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
+        const notification = `Figyelem, <@&${role.id}>! ${message.author} ${eventName} eseménye aktív a szerverén!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzájuk!`;
 
         try {
             await message.channel.send(notification);
