@@ -1,7 +1,7 @@
 // Import necessary modules
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
-const fetch = require('node-fetch'); // Added for keep-alive pings
+// Removed: const fetch = require('node-fetch'); // Don't require globally for v3+
 require('dotenv').config();
 
 // --- Configuration ---
@@ -216,32 +216,36 @@ client.on('messageCreate', async (message) => {
     // }
 });
 
-// --- Keep-Alive Function ---
+// --- Keep-Alive Function (FIXED) ---
 function keepAlive() {
-    const url = process.env.RENDER_EXTERNAL_URL;  // Get the Render URL from the environment
+    const url = process.env.RENDER_EXTERNAL_URL; // Get the Render URL from the environment
     if (url) {
         console.log(`Setting up keep-alive pings to ${url}`);
-        setInterval(async () => { // Changed to async to use await
+        setInterval(async () => { // Keep async here
             try {
-                const response = await fetch(url); // Await the fetch
+                // Dynamically import node-fetch within the async function
+                const fetch = (await import('node-fetch')).default;
+                const response = await fetch(url); // Now fetch should work
                 if (response.ok) {
-                    console.log(`Pinged ${url} to keep server alive`);
+                    console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`);
                 } else {
                     console.error(`Failed to ping ${url}. Status code: ${response.status}`);
                 }
             } catch (err) {
+                // Catch errors during import or fetch
                 console.error(`Error pinging ${url}:`, err);
             }
         }, 5 * 60 * 1000); // Ping every 5 minutes (in milliseconds)
     } else {
-        console.warn('RENDER_EXTERNAL_URL is not set.  Keep-alive pings are disabled.');
+        console.warn('RENDER_EXTERNAL_URL is not set. Keep-alive pings are disabled.');
     }
 }
+
 
 // --- Login ---
 const token = process.env.DISCORD_TOKEN;
 const dbUrl = process.env.DATABASE_URL;
-const port = process.env.PORT || 8080;
+const port = process.env.PORT || 8080; // Render usually sets PORT
 
 if (!token) {
     console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
@@ -252,14 +256,20 @@ if (!dbUrl) {
     process.exit(1);
 }
 
+// Basic HTTP server to respond to Render health checks
+const http = require('http');
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('OK');
+}).listen(port, () => {
+     console.log(`HTTP server listening on port ${port} for health checks.`);
+});
+
+
+// Login to Discord AFTER setting up the HTTP server
 client.login(token).then(() => {
-    console.log(`Successfully logged in and listening on port ${port}`);
-    const http = require('http');
-    http.createServer((req, res) => {
-        res.writeHead(200);
-        res.end('OK');
-    }).listen(port);
+    console.log(`Successfully logged in to Discord as ${client.user.tag}`);
 }).catch(error => {
     console.error("FATAL ERROR: Failed to login to Discord:", error);
-    process.exit(1);
+    process.exit(1); // Exit if Discord login fails
 });
