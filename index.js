@@ -211,7 +211,7 @@ client.on('messageCreate', async (message) => {
         }
 
         //const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
-        const notification = `Figyelem, <@&${role.id}>! ${message.author} ${eventName} eseménye aktív a szerverén!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzájuk!`;
+        const notification = `Figyelem, <@&${role.id}>! ${message.author} szerverén éppen ${eventName} esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
 
         try {
             await message.channel.send(notification);
