@@ -221,16 +221,22 @@ function keepAlive() {
     const url = process.env.RENDER_EXTERNAL_URL;  // Get the Render URL from the environment
     if (url) {
         console.log(`Setting up keep-alive pings to ${url}`);
-        setInterval(() => {
-            fetch(url)
-                .then(() => console.log(`Pinged ${url} to keep server alive`))
-                .catch(err => console.error(`Error pinging ${url}:`, err));
+        setInterval(async () => { // Changed to async to use await
+            try {
+                const response = await fetch(url); // Await the fetch
+                if (response.ok) {
+                    console.log(`Pinged ${url} to keep server alive`);
+                } else {
+                    console.error(`Failed to ping ${url}. Status code: ${response.status}`);
+                }
+            } catch (err) {
+                console.error(`Error pinging ${url}:`, err);
+            }
         }, 5 * 60 * 1000); // Ping every 5 minutes (in milliseconds)
     } else {
         console.warn('RENDER_EXTERNAL_URL is not set.  Keep-alive pings are disabled.');
     }
 }
-
 
 // --- Login ---
 const token = process.env.DISCORD_TOKEN;
