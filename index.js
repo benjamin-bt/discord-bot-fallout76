@@ -111,7 +111,8 @@ client.on('messageCreate', async (message) => {
     if (command === 'addign') {
         const ign = args.join(' ');
         if (!ign) {
-            return message.reply('Please provide your In-Game Name (IGN) after the command.\nExample: `!addign Your IGN Here`');
+            // return message.reply('Please provide your In-Game Name (IGN) after the command.\nExample: `!addign Your IGN Here`');
+            return message.reply('Kérlek add meg a játékban használt nevedet (IGN).\nPéldául: `!addign [játékbeli neved]`');
         }
 
         const query = `
@@ -126,10 +127,12 @@ client.on('messageCreate', async (message) => {
         try {
             await pool.query(query, values);
             console.log(`Database: Added/Updated IGN for ${message.author.tag}: ${ign}`);
-            return message.reply(`✅ Your IGN has been successfully set/updated to: **${ign}**`);
+            // return message.reply(`✅ Your IGN has been successfully set/updated to: **${ign}**`);
+            return message.reply(`✅ A játékbeli neved (IGN) sikeresen hozzá lett adva/frissítve lett erre: **${ign}**`);
         } catch (err) {
             console.error("Database Error during !addign:", err);
-            return message.reply("❌ An error occurred while saving your IGN. Please try again later.");
+            // return message.reply("❌ An error occurred while saving your IGN. Please try again later.");
+            return message.reply("❌ Hiba történt a játékbeli neved (IGN) mentésekor. Próbáld újra később.");
         }
     }
 
@@ -141,13 +144,16 @@ client.on('messageCreate', async (message) => {
             const result = await pool.query(query, values);
             if (result.rows.length > 0) {
                 const userIGN = result.rows[0].ign;
-                return message.reply(`Your registered IGN is: **${userIGN}**`);
+                // return message.reply(`Your registered IGN is: **${userIGN}**`);
+                return message.reply(`A regisztrált játékbeli neved (IGN): **${userIGN}**`);
             } else {
-                return message.reply(`You haven't registered an IGN yet. Use \`${PREFIX}addign [your IGN]\` to set one.`);
+                // return message.reply(`You haven't registered an IGN yet. Use \`${PREFIX}addign [your IGN]\` to set one.`);
+                return message.reply(`Még nem adtál meg játékbeli nevet (IGN). Használd a \`${PREFIX}addign [játékbeli neved]\` parancsot a hozzáadáshoz.`);
             }
         } catch (err) {
             console.error("Database Error during !myign:", err);
-            return message.reply("❌ An error occurred while retrieving your IGN. Please try again later.");
+            // return message.reply("❌ An error occurred while retrieving your IGN. Please try again later.");
+            return message.reply("❌ Hiba történt a játékbeli neved (IGN) lekérdezésekor. Próbáld újra később.");
         }
     }
 
@@ -159,13 +165,16 @@ client.on('messageCreate', async (message) => {
             const result = await pool.query(query, values);
             if (result.rowCount > 0) {
                 console.log(`Database: Removed IGN for ${message.author.tag}`);
-                return message.reply("✅ Your registered IGN has been removed.");
+                //return message.reply("✅ Your registered IGN has been removed.");
+                return message.reply("✅ A játékbeli neved (IGN) eltávolítva.");
             } else {
-                return message.reply("You don't currently have an IGN registered to remove.");
+                //return message.reply("You don't currently have an IGN registered to remove.");
+                return message.reply("Jelenleg nincs játékbeli neved (IGN) regisztrálva, amit eltávolíthatnál.");
             }
         } catch (err) {
             console.error("Database Error during !removeign:", err);
-            return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
+            // return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
+            return message.reply("❌ Hiba történt a játékbeli neved (IGN) eltávolításakor. Próbáld újra később.");
         }
     }
 
@@ -183,11 +192,13 @@ client.on('messageCreate', async (message) => {
             if (result.rows.length > 0) {
                 userIGN = result.rows[0].ign;
             } else {
-                return message.reply(`You need to set your IGN first using \`${PREFIX}addign [your IGN]\` before announcing events.`);
+                // return message.reply(`You need to set your IGN first using \`${PREFIX}addign [your IGN]\` before announcing events.`);
+                return message.reply(`Először állítsd be a játékbeli nevedet (IGN) a \`${PREFIX}addign [játékbeli neved]\` paranccsal, mielőtt eseményeket jelentesz.`);
             }
         } catch (err) {
             console.error(`Database Error fetching IGN for event command !${command}:`, err);
-            return message.reply("❌ An error occurred while checking your registered IGN. Please try again later.");
+            // return message.reply("❌ An error occurred while checking your registered IGN. Please try again later.");
+            return message.reply("❌ Hiba történt a játékbeli neved (IGN) ellenőrzésekor. Próbáld újra később.");
         }
 
         // Find the Eventek role
@@ -195,17 +206,20 @@ client.on('messageCreate', async (message) => {
 
         if (!role) {
             console.error(`Configuration Error: Role "${EVENT_ROLE_NAME}" not found on server "${message.guild.name}" for command "!${command}"`);
-            return message.reply(`❌ Error: The role "@${EVENT_ROLE_NAME}" was not found on this server. Please ask an admin to check the role name in the bot's configuration or create the role.`);
+            // return message.reply(`❌ Error: The role "@${EVENT_ROLE_NAME}" was not found on this server. Please ask an admin to check the role name in the bot's configuration or create the role.`);
+            return message.reply(`❌ Hiba: A "${EVENT_ROLE_NAME}" szerepkör nem található ezen a szerveren. Kérlek kérdezd meg az adminisztrátort, hogy ellenőrizze a szerepkör nevét a bot konfigurációjában, vagy hozza létre a szerepkört.`);
         }
 
         const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
+        // const notification = `Figyelem, <@&${role.id}>! ${message.author} ${eventName} eseménye aktív a szerverén!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzájuk!`;
 
         try {
             await message.channel.send(notification);
             console.log(`Sent notification for ${eventName} triggered by ${message.author.tag}`);
         } catch (error) {
             console.error(`Discord API Error sending event notification for ${eventName}:`, error);
-            message.reply("❌ Sorry, I couldn't send the notification message. Please check my permissions in this channel.");
+            // message.reply("❌ Sorry, I couldn't send the notification message. Please check my permissions in this channel.");
+            message.reply("❌ Sajnálom, nem tudtam elküldeni az értesítést. Kérlek ellenőrizd a jogosultságaimat ebben a csatornában.");
         }
         return;
     }
