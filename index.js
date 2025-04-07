@@ -198,6 +198,9 @@ client.on(Events.InteractionCreate, async interaction => {
                 await interaction.reply({ content: "Jelenleg nincs játékbeli neved (IGN) regisztrálva, amit eltávolíthatnál.", ephemeral: true });
             }
 
+        } else if (commandName === 'status') {
+            // Send a link to the game server status page
+            await interaction.reply({ content: "🔗 [Ellenőrizd a Fallout 76 szerverek állapotát itt!](https://status.bethesda.net/)", ephemeral: true });
         } else if (commandName === '76event') {
             const eventKey = interaction.options.getString('name', true); // Get the chosen event key (value from autocomplete)
             const eventConfig = EVENTS_CONFIG[eventKey];

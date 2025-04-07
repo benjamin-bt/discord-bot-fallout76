@@ -50,6 +50,11 @@ const commands = [
         name: 'removeign',
         description: 'Remove your registered IGN. / Távolítsd el a regisztrált IGN-ed.',
     },
+    //status command
+    {
+        name: 'status',
+        description: 'Link to check the game servers\' status. / Link a játék szervereinek állapotának ellenőrzéséhez.',
+    },
     // /event command (consolidated)
     {
         name: '76event',
