@@ -214,6 +214,11 @@ client.on('messageCreate', async (message) => {
         }
     }
 
+    // !status command
+    else if (command === 'status') {
+        return message.reply("A játék státuszát (hogy éppen online van-e) itt ellenőrizheted: https://status.bethesda.net/en");
+    }
+
     // --- Event Announce Command ---
     else if (EVENTS_CONFIG[command]) {
         const eventConfig = EVENTS_CONFIG[command];
