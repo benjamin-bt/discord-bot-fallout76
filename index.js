@@ -1,105 +1,12 @@
 // Import necessary modules
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
-const http = require('http'); // For health check server
-const puppeteer = require('puppeteer'); // Puppeteer for web scraping
+// Removed: const fetch = require('node-fetch'); // Don't require globally for v3+
 require('dotenv').config();
-// Note: axios is required in package.json but not used here. Remove if not needed elsewhere.
-// const axios = require('axios');
-
-// --- Puppeteer Configuration ---
-const BETHESDA_STATUS_URL = 'https://status.bethesda.net/en';
-const TARGET_SERVICE_NAME = 'Fallout 76';
-const puppeteerOptions = {
-  // Explicitly set the path where Chrome is installed in the Dockerfile
-  executablePath: '/usr/bin/google-chrome-stable',
-  headless: true,
-  args: [
-    '--no-sandbox', // Required for running as root in Docker, but we run as pptruser
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage', // Avoids issues with limited /dev/shm size in Docker
-    '--disable-gpu', // Disable GPU hardware acceleration
-    '--no-zygote' // Helps reduce resource usage
-    // Note: '--single-process' is sometimes suggested but can cause instability
-  ]
-};
-
-// Function to scrape Fallout 76's status using Puppeteer
-async function getFallout76Status() {
-    let browser = null; // Define browser outside try block for finally scope
-    console.log('Launching Puppeteer browser inside Docker...');
-    console.log(`Using executable path: ${puppeteerOptions.executablePath}`);
-
-    try {
-        browser = await puppeteer.launch(puppeteerOptions);
-        const page = await browser.newPage();
-
-        // Set a common User-Agent
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36'); // Example User Agent
-
-        console.log(`Navigating to: ${BETHESDA_STATUS_URL}`);
-        // Navigate and wait for the network to be mostly idle
-        // Increased timeout for potentially slow loads in container environments
-        await page.goto(BETHESDA_STATUS_URL, { waitUntil: 'networkidle2', timeout: 90000 }); // Use networkidle2, 90s timeout
-
-        console.log('Page loaded, evaluating content...');
-
-        // Use page.evaluate to run code within the browser context
-        // Using selectors based on user's previous finding: <div class="status-container"><div>Name</div><div>Status</div></div>
-        const status = await page.evaluate((targetServiceName) => {
-            let foundStatus = 'Status not found'; // Default inside evaluate
-            let serviceFound = false;
-
-            // Select all divs that are direct children of elements with class 'status-container'
-            const nameDivs = document.querySelectorAll('.status-container > div:first-child');
-
-            for (const div of nameDivs) {
-                if (div.textContent && div.textContent.trim() === targetServiceName) {
-                    serviceFound = true;
-                    // Get the next element sibling (should be the status div)
-                    const statusElement = div.nextElementSibling;
-                    if (statusElement && statusElement.textContent) {
-                        foundStatus = statusElement.textContent.trim();
-                    } else {
-                        foundStatus = 'Could not determine status'; // Status element missing or empty
-                    }
-                    break; // Stop searching once found
-                }
-            }
-
-             if (!serviceFound) {
-                // If the loop finishes without finding the service
-                foundStatus = `${targetServiceName} not listed on status page`;
-             }
-
-            return foundStatus; // Return the found status
-        }, TARGET_SERVICE_NAME); // Pass TARGET_SERVICE_NAME into evaluate
-
-        console.log(`Puppeteer evaluation completed. Found status: ${status}`);
-        return status;
-
-    } catch (error) {
-        console.error(`Error during Puppeteer operation in getFallout76Status: ${error}`);
-        if (error.message.includes('Failed to launch the browser process')) {
-             console.error('Error suggests Chrome executable is still missing or inaccessible within Docker. Check Dockerfile installation steps and permissions.');
-             throw new Error('Failed to launch browser - Check Dockerfile configuration.');
-        }
-        if (error.name === 'TimeoutError') {
-             console.error(`Navigation timeout occurred when loading ${BETHESDA_STATUS_URL}`);
-             throw new Error('Failed to load Bethesda status page within timeout.');
-        }
-        throw new Error('Failed to retrieve status using Puppeteer.'); // Generic error for other issues
-    } finally {
-        if (browser) {
-            console.log('Closing Puppeteer browser...');
-            await browser.close();
-        }
-    }
-}
 
 // --- Configuration ---
 const PREFIX = '!';
-const EVENT_ROLE_NAME = 'Eventek'; // Role name for event pings
+const EVENT_ROLE_NAME = 'Eventek';
 const EVENTS_CONFIG = {
     'rumble': { eventName: "Radiation Rumble" },
     'sand': { eventName: "Line In The Sand" },
@@ -110,7 +17,7 @@ const EVENTS_CONFIG = {
     'seismic': { eventName: "Seismic Activity" },
     'burden': { eventName: "Beasts of Burden" },
     'campfire': { eventName: "Campfire Tales" },
-    'caravan': { eventName: "Caravan Skyline Drive" }, // Assuming this is the correct event name
+    'caravan': { eventName: "Caravan Skyline Drive" },
     'pastimes': { eventName: "Dangerous Pastimes" },
     'guests': { eventName: "Distinguished Guests" },
     'encryptid': { eventName: "Encryptid" },
@@ -138,7 +45,7 @@ const EVENTS_CONFIG = {
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
-        rejectUnauthorized: false // Common setting for Heroku/Render PG
+        rejectUnauthorized: false
     }
 });
 
@@ -146,7 +53,6 @@ pool.on('error', (err, client) => {
     console.error('Unexpected error on idle database client', err);
 });
 
-// Function to ensure the database table exists
 async function ensureTableExists() {
     const client = await pool.connect();
     try {
@@ -161,7 +67,7 @@ async function ensureTableExists() {
         console.log("Database table 'user_igns' is ready.");
     } catch (err) {
         console.error("Fatal Error: Could not ensure database table 'user_igns' exists:", err);
-        process.exit(1); // Exit if table cannot be ensured
+        process.exit(1);
     } finally {
         client.release();
     }
@@ -173,9 +79,9 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers, // Needed for GuildMember related events/properties if used
+        GatewayIntentBits.GuildMembers,
     ],
-    partials: [Partials.Channel, Partials.Message], // Necessary for events in uncached channels/messages
+    partials: [Partials.Channel, Partials.Message],
 });
 
 // --- Bot Event Handlers ---
@@ -183,170 +89,178 @@ const client = new Client({
 client.on('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     try {
-        await ensureTableExists(); // Ensure DB table is ready before accepting commands
+        await ensureTableExists();
         console.log(`Bot is ready and listening for commands with prefix "${PREFIX}"`);
     } catch (error) {
         console.error("Error during bot readiness routine:", error);
-        process.exit(1); // Exit if essential setup fails
+        process.exit(1);
     }
-    // Start the keep-alive function to prevent Render service from sleeping (if applicable)
+    // Start the keep-alive function
     keepAlive();
 });
 
 client.on('messageCreate', async (message) => {
-    // Ignore messages from bots, DMs, or those not starting with the prefix
     if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
 
-    // Parse command and arguments
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     const userId = message.author.id;
 
     // --- Command Handling ---
 
-    // Command: !addign [Your IGN]
     if (command === 'addign') {
         const ign = args.join(' ');
         if (!ign) {
+            // return message.reply('Please provide your In-Game Name (IGN) after the command.\nExample: `!addign Your IGN Here`');
             return message.reply('Kérlek add meg a játékban használt nevedet (IGN).\nPéldául: `!addign [játékbeli neved]`');
         }
+
         const query = `
-            INSERT INTO user_igns (user_id, ign) VALUES ($1, $2)
-            ON CONFLICT (user_id) DO UPDATE SET ign = EXCLUDED.ign, last_updated = CURRENT_TIMESTAMP;
+            INSERT INTO user_igns (user_id, ign)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET
+                ign = EXCLUDED.ign,
+                last_updated = CURRENT_TIMESTAMP;
         `;
+        const values = [userId, ign];
+
         try {
-            await pool.query(query, [userId, ign]);
+            await pool.query(query, values);
             console.log(`Database: Added/Updated IGN for ${message.author.tag}: ${ign}`);
+            // return message.reply(`✅ Your IGN has been successfully set/updated to: **${ign}**`);
             return message.reply(`✅ A játékbeli neved (IGN) sikeresen hozzá lett adva/frissítve lett erre: **${ign}**`);
         } catch (err) {
             console.error("Database Error during !addign:", err);
+            // return message.reply("❌ An error occurred while saving your IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) mentésekor. Próbáld újra később.");
         }
     }
 
-    // Command: !myign
     else if (command === 'myign') {
         const query = 'SELECT ign FROM user_igns WHERE user_id = $1;';
+        const values = [userId];
+
         try {
-            const result = await pool.query(query, [userId]);
+            const result = await pool.query(query, values);
             if (result.rows.length > 0) {
-                return message.reply(`A regisztrált játékbeli neved (IGN): **${result.rows[0].ign}**`);
+                const userIGN = result.rows[0].ign;
+                // return message.reply(`Your registered IGN is: **${userIGN}**`);
+                return message.reply(`A regisztrált játékbeli neved (IGN): **${userIGN}**`);
             } else {
+                // return message.reply(`You haven't registered an IGN yet. Use \`${PREFIX}addign [your IGN]\` to set one.`);
                 return message.reply(`Még nem adtál meg játékbeli nevet (IGN). Használd a \`${PREFIX}addign [játékbeli neved]\` parancsot a hozzáadáshoz.`);
             }
         } catch (err) {
             console.error("Database Error during !myign:", err);
+            // return message.reply("❌ An error occurred while retrieving your IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) lekérdezésekor. Próbáld újra később.");
         }
     }
 
-    // Command: !removeign
     else if (command === 'removeign') {
         const query = 'DELETE FROM user_igns WHERE user_id = $1;';
+        const values = [userId];
+
         try {
-            const result = await pool.query(query, [userId]);
+            const result = await pool.query(query, values);
             if (result.rowCount > 0) {
                 console.log(`Database: Removed IGN for ${message.author.tag}`);
+                //return message.reply("✅ Your registered IGN has been removed.");
                 return message.reply("✅ A játékbeli neved (IGN) eltávolítva.");
             } else {
+                //return message.reply("You don't currently have an IGN registered to remove.");
                 return message.reply("Jelenleg nincs játékbeli neved (IGN) regisztrálva, amit eltávolíthatnál.");
             }
         } catch (err) {
             console.error("Database Error during !removeign:", err);
+            // return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) eltávolításakor. Próbáld újra később.");
         }
     }
 
-    // Command: !status
-    else if (command === 'status') {
-        try {
-            await message.channel.sendTyping(); // Show bot is working
-            console.log(`User ${message.author.tag} triggered !status command.`);
-            const status = await getFallout76Status(); // Uses Puppeteer via Docker
-            return message.reply(`A Bethesda Status Portal szerint a **${TARGET_SERVICE_NAME}** állapota jelenleg: **${status}**\n(Forrás: ${BETHESDA_STATUS_URL})`);
-        } catch (error) {
-            console.error(`Error executing !status command for ${message.author.tag}:`, error.message);
-            // Give specific feedback based on error type
-             if (error.message.includes('Failed to launch browser')) {
-                 return message.reply(`❌ Hiba történt a **${TARGET_SERVICE_NAME}** állapotának lekérdezésekor. Probléma volt a háttérben futó böngésző indításával (Docker konfigurációs hiba?). Kérlek értesítsd a bot adminisztrátorát.`);
-             } else if (error.message.includes('timeout')) {
-                  return message.reply(`❌ Hiba történt a **${TARGET_SERVICE_NAME}** állapotának lekérdezésekor. Az állapotjelző oldal túl lassan töltött be.`);
-             }
-            return message.reply(`❌ Hiba történt a **${TARGET_SERVICE_NAME}** állapotának lekérdezésekor. Próbáld újra később.`);
-        }
-    }
-
-    // --- Event Announce Commands ---
+    // --- Event Announce Command ---
     else if (EVENTS_CONFIG[command]) {
         const eventConfig = EVENTS_CONFIG[command];
-        const { eventName } = eventConfig;
+        const { eventName } = eventConfig; //  Use the eventName
         let userIGN = null;
 
-        // Fetch IGN from database
         const getIgnQuery = 'SELECT ign FROM user_igns WHERE user_id = $1;';
+        const getIgnValues = [userId];
+
         try {
-            const result = await pool.query(getIgnQuery, [userId]);
+            const result = await pool.query(getIgnQuery, getIgnValues);
             if (result.rows.length > 0) {
                 userIGN = result.rows[0].ign;
             } else {
+                // return message.reply(`You need to set your IGN first using \`${PREFIX}addign [your IGN]\` before announcing events.`);
                 return message.reply(`Először állítsd be a játékbeli nevedet (IGN) a \`${PREFIX}addign [játékbeli neved]\` paranccsal, mielőtt eseményeket jelentesz.`);
             }
         } catch (err) {
             console.error(`Database Error fetching IGN for event command !${command}:`, err);
+            // return message.reply("❌ An error occurred while checking your registered IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) ellenőrzésekor. Próbáld újra később.");
         }
 
-        // Find the role to ping
+        // Find the Eventek role
         const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === EVENT_ROLE_NAME.toLowerCase());
+
         if (!role) {
             console.error(`Configuration Error: Role "${EVENT_ROLE_NAME}" not found on server "${message.guild.name}" for command "!${command}"`);
+            // return message.reply(`❌ Error: The role "@${EVENT_ROLE_NAME}" was not found on this server. Please ask an admin to check the role name in the bot's configuration or create the role.`);
             return message.reply(`❌ Hiba: A "${EVENT_ROLE_NAME}" szerepkör nem található ezen a szerveren. Kérlek kérdezd meg az adminisztrátort, hogy ellenőrizze a szerepkör nevét a bot konfigurációjában, vagy hozza létre a szerepkört.`);
         }
 
-        // Send notification message
-        const notification = `Figyelem, <@&${role.id}>! ${message.author} szerverén éppen a **${eventName}** esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
+        //const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
+        const notification = `Figyelem, <@&${role.id}>! ${message.author} szerverén éppen a ${eventName} esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
+
         try {
             await message.channel.send(notification);
             console.log(`Sent notification for ${eventName} triggered by ${message.author.tag}`);
         } catch (error) {
             console.error(`Discord API Error sending event notification for ${eventName}:`, error);
+            // message.reply("❌ Sorry, I couldn't send the notification message. Please check my permissions in this channel.");
             message.reply("❌ Sajnálom, nem tudtam elküldeni az értesítést. Kérlek ellenőrizd a jogosultságaimat ebben a csatornában.");
         }
-        return; // Explicit return after handling the command
+        return;
     }
 
+    // Optional: Handle unknown commands
+    // else {
+    //  message.reply(`Unknown command: \`${PREFIX}${command}\`. Try \`!addign\`, \`!myign\`, \`!removeign\`, or an event command like \`!rumble\`.`);
+    // }
 });
 
-// --- Keep-Alive Function ---
-// Pings the Render service URL to prevent sleeping on free tiers
+// --- Keep-Alive Function (FIXED) ---
 function keepAlive() {
-    const url = process.env.RENDER_EXTERNAL_URL; // Get the Render URL from environment
+    const url = process.env.RENDER_EXTERNAL_URL; // Get the Render URL from the environment
     if (url) {
         console.log(`Setting up keep-alive pings to ${url}`);
-        setInterval(async () => {
+        setInterval(async () => { // Keep async here
             try {
-                // Use dynamic import for node-fetch
+                // Dynamically import node-fetch within the async function
                 const fetch = (await import('node-fetch')).default;
-                const response = await fetch(url);
-                if (!response.ok) {
-                    // Log only if the ping fails
-                    console.error(`Keep-alive ping failed to ${url}. Status code: ${response.status}`);
+                const response = await fetch(url); // Now fetch should work
+                if (response.ok) {
+                    console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`);
+                } else {
+                    console.error(`Failed to ping ${url}. Status code: ${response.status}`);
                 }
             } catch (err) {
-                console.error(`Error during keep-alive ping to ${url}:`, err);
+                // Catch errors during import or fetch
+                console.error(`Error pinging ${url}:`, err);
             }
-        }, 10 * 60 * 1000); // Ping every 10 minutes (adjust as needed)
+        }, 5 * 60 * 1000); // Ping every 5 minutes (in milliseconds)
     } else {
         console.warn('RENDER_EXTERNAL_URL is not set. Keep-alive pings are disabled.');
     }
 }
 
-// --- Login and Server Setup ---
+
+// --- Login ---
 const token = process.env.DISCORD_TOKEN;
 const dbUrl = process.env.DATABASE_URL;
-const port = process.env.PORT || 8080; // Render sets the PORT environment variable
+const port = process.env.PORT || 8080; // Render usually sets PORT
 
-// Validate essential configuration
 if (!token) {
     console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
     process.exit(1);
@@ -356,14 +270,15 @@ if (!dbUrl) {
     process.exit(1);
 }
 
-// Basic HTTP server for Render health checks
-// Responds with 200 OK to any request
+// Basic HTTP server to respond to Render health checks
+const http = require('http');
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('OK');
 }).listen(port, () => {
      console.log(`HTTP server listening on port ${port} for health checks.`);
 });
+
 
 // Login to Discord AFTER setting up the HTTP server
 client.login(token).then(() => {
