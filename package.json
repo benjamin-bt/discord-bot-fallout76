@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "axios": "^1.8.4",
     "discord.js": "^14.18.0",
@@ -6,8 +9,5 @@
     "node-fetch": "^3.3.2",
     "pg": "^8.14.1",
     "puppeteer": "^24.6.0"
-  },
-  "scripts": {
-    "postinstall": "npx puppeteer install"
-}
+  }
 }
