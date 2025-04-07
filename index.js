@@ -1,14 +1,13 @@
 // Import necessary modules
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, InteractionType, Events } = require('discord.js'); // Added InteractionType, Events
 const { Pool } = require('pg');
-// Removed: const fetch = require('node-fetch'); // Don't require globally for v3+
 require('dotenv').config();
-const http = require('http'); // Import http for the server
+const http = require('http');
 
 // --- Configuration ---
-const PREFIX = '!';
+// REMOVED: const PREFIX = '!'; // Prefix is no longer needed
 const EVENT_ROLE_NAME = 'Eventek'; // Make sure this matches the exact role name (case-sensitive)
-const EVENTS_CONFIG = {
+const EVENTS_CONFIG = { // Keep this config for event details and autocomplete
     'rumble': { eventName: "Radiation Rumble" },
     'sand': { eventName: "Line In The Sand" },
     'eviction': { eventName: "Eviction Notice" },
@@ -18,7 +17,7 @@ const EVENTS_CONFIG = {
     'seismic': { eventName: "Seismic Activity" },
     'burden': { eventName: "Beasts of Burden" },
     'campfire': { eventName: "Campfire Tales" },
-    'caravan': { eventName: "Caravan Skyline Drive" }, // Assuming this is the correct event name
+    'caravan': { eventName: "Caravan Skyline Drive" },
     'pastimes': { eventName: "Dangerous Pastimes" },
     'guests': { eventName: "Distinguished Guests" },
     'encryptid': { eventName: "Encryptid" },
@@ -41,40 +40,31 @@ const EVENTS_CONFIG = {
     'love': { eventName: "The Tunnel of Love" },
     'fever': { eventName: "Uranium Fever" },
 };
+// Export for deploy-commands.js if needed there, otherwise keep internal
+module.exports = { EVENTS_CONFIG }; // Exporting for deploy-commands
 
 // --- Database Setup ---
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) {
     console.error("FATAL ERROR: DATABASE_URL environment variable not found.");
-    process.exit(1); // Exit if DB URL is missing
+    process.exit(1);
 }
-
 const pool = new Pool({
     connectionString: dbUrl,
-    ssl: {
-        rejectUnauthorized: false // Often required for cloud providers like Render/Heroku
-    },
-    // Optional: Add connection timeout (e.g., 10 seconds)
-    // connectionTimeoutMillis: 10000,
-    // Optional: Add statement timeout (e.g., 5 seconds)
-    // statement_timeout: 5000,
+    ssl: { rejectUnauthorized: false },
 });
-
 pool.on('error', (err, client) => {
-    // This catches errors on idle clients in the pool
     console.error('Unexpected error on idle database client', err);
-    // Consider whether to exit the process depending on the error severity
-    // process.exit(-1);
 });
 
 // --- Function to ensure the database table exists ---
+// (Keep ensureTableExists function exactly as it was in the previous version)
 async function ensureTableExists() {
-    let client; // Define client outside the try block to access it in finally
+    let client;
     try {
         console.log("Attempting to connect to the database...");
-        client = await pool.connect(); // Attempt to get a client from the pool
+        client = await pool.connect();
         console.log("Successfully connected to the database pool.");
-
         const createTableQuery = `
             CREATE TABLE IF NOT EXISTS user_igns (
                 user_id TEXT PRIMARY KEY,
@@ -85,9 +75,7 @@ async function ensureTableExists() {
         console.log("Executing CREATE TABLE IF NOT EXISTS query...");
         await client.query(createTableQuery);
         console.log("Database table 'user_igns' is ready.");
-
     } catch (err) {
-        // Log the specific error encountered
         console.error("Error during database setup (ensureTableExists):", err);
         if (err.message.includes('terminat')) {
              console.error("Detail: The connection was terminated. Check DB server status, network access, and DATABASE_URL.");
@@ -96,12 +84,8 @@ async function ensureTableExists() {
         } else if (err.message.includes('password authentication failed')) {
              console.error("Detail: Database authentication failed. Verify the username and password in DATABASE_URL.");
         }
-        // Re-throw the error to be caught by the calling function (client.on('ready'))
-        // This ensures the bot doesn't continue in a broken state.
         throw new Error(`Could not ensure database table 'user_igns' exists: ${err.message}`);
-
     } finally {
-        // Ensure the client is released back to the pool if it was acquired
         if (client) {
             console.log("Releasing database client.");
             client.release();
@@ -111,203 +95,209 @@ async function ensureTableExists() {
     }
 }
 
+
 // --- Discord Client Setup ---
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers, // Keep GuildMembers if you need member info beyond the message context
+        // GatewayIntentBits.GuildMessages, // Less crucial now, interactions are primary
+        // GatewayIntentBits.MessageContent, // Not needed for slash commands
+        GatewayIntentBits.GuildMembers, // Still useful for getting member info if needed
     ],
-    partials: [Partials.Channel, Partials.Message], // Keep Partials if needed for older messages/DMs
+    partials: [Partials.Channel], // Partials might be less needed now
 });
 
 // --- Bot Event Handlers ---
 
-client.on('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}!`);
+client.once(Events.ClientReady, async c => { // Use ClientReady event once
+    console.log(`Logged in as ${c.user.tag}!`);
     try {
-        await ensureTableExists(); // Call the setup function
-        console.log(`Bot is ready and listening for commands with prefix "${PREFIX}"`);
-        // Start the keep-alive function *after* successful DB setup and login
+        await ensureTableExists();
+        console.log(`Bot is ready and listening for interactions.`);
         keepAlive();
     } catch (error) {
-        // Catch the error thrown from ensureTableExists
         console.error("FATAL: Bot readiness routine failed due to database setup error:", error);
-        // Exit the process because the bot cannot function without the database table
         process.exit(1);
     }
 });
 
-client.on('messageCreate', async (message) => {
-    // Ignore bots, DMs, and messages without the prefix
-    if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
+// --- Interaction Handler ---
+client.on(Events.InteractionCreate, async interaction => {
+    // --- Autocomplete Handler ---
+    if (interaction.isAutocomplete()) {
+        const commandName = interaction.commandName;
 
-    // Parse command and arguments
-    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-    const userId = message.author.id;
+        if (commandName === '76event') {
+            const focusedOption = interaction.options.getFocused(true); // Get the option the user is typing in
+            const focusedValue = focusedOption.value.toLowerCase();
 
-    // --- Command Handling ---
+            if (focusedOption.name === 'name') {
+                // Filter event names based on user input
+                const filteredChoices = Object.entries(EVENTS_CONFIG)
+                    .map(([key, config]) => ({ name: config.eventName, value: key })) // Map to {name, value}
+                    .filter(choice => choice.name.toLowerCase().includes(focusedValue))
+                    .slice(0, 25); // Discord limits choices to 25
 
-    // !addign command
-    if (command === 'addign') {
-        const ign = args.join(' ');
-        if (!ign) {
-            return message.reply('Kérlek add meg a játékban használt nevedet (IGN).\nPéldául: `!addign [játékbeli neved]`');
+                try {
+                    await interaction.respond(filteredChoices);
+                } catch (error) {
+                    console.error(`Error responding to autocomplete for /event:`, error);
+                }
+            }
         }
-
-        const query = `
-            INSERT INTO user_igns (user_id, ign)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id) DO UPDATE SET
-                ign = EXCLUDED.ign,
-                last_updated = CURRENT_TIMESTAMP;
-        `;
-        const values = [userId, ign];
-
-        try {
-            await pool.query(query, values); // Use pool directly for queries
-            console.log(`Database: Added/Updated IGN for ${message.author.tag}: ${ign}`);
-            return message.reply(`✅ A játékbeli neved (IGN) sikeresen hozzá lett adva/frissítve lett erre: **${ign}**`);
-        } catch (err) {
-            console.error("Database Error during !addign:", err);
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) mentésekor. Próbáld újra később.");
-        }
+        return; // Stop processing if it's autocomplete
     }
 
-    // !myign command
-    else if (command === 'myign') {
-        const query = 'SELECT ign FROM user_igns WHERE user_id = $1;';
-        const values = [userId];
+    // --- Slash Command Handler ---
+    if (!interaction.isChatInputCommand()) return; // Only handle slash commands
 
-        try {
+    const commandName = interaction.commandName;
+    const userId = interaction.user.id; // Get user ID from interaction
+
+    // Defer reply for potentially long operations (like DB queries)
+    // Use ephemeral: true if only the user should see the reply
+    // await interaction.deferReply({ ephemeral: false }); // Use if needed
+
+    try {
+        // --- Command Logic ---
+        if (commandName === 'addign') {
+            const ign = interaction.options.getString('ign', true); // Get required string option
+
+            const query = `
+                INSERT INTO user_igns (user_id, ign) VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET ign = EXCLUDED.ign, last_updated = CURRENT_TIMESTAMP;
+            `;
+            const values = [userId, ign];
+
+            await pool.query(query, values);
+            console.log(`Database: Added/Updated IGN for ${interaction.user.tag}: ${ign}`);
+            // Use interaction.reply instead of message.reply
+            await interaction.reply({ content: `✅ A játékbeli neved (IGN) sikeresen hozzá lett adva/frissítve lett erre: **${ign}**`, ephemeral: true }); // Ephemeral: only user sees it
+
+        } else if (commandName === 'myign') {
+            const query = 'SELECT ign FROM user_igns WHERE user_id = $1;';
+            const values = [userId];
             const result = await pool.query(query, values);
+
             if (result.rows.length > 0) {
                 const userIGN = result.rows[0].ign;
-                return message.reply(`A regisztrált játékbeli neved (IGN): **${userIGN}**`);
+                await interaction.reply({ content: `A regisztrált játékbeli neved (IGN): **${userIGN}**`, ephemeral: true });
             } else {
-                return message.reply(`Még nem adtál meg játékbeli nevet (IGN). Használd a \`${PREFIX}addign [játékbeli neved]\` parancsot a hozzáadáshoz.`);
+                await interaction.reply({ content: `Még nem adtál meg játékbeli nevet (IGN). Használd a \`/addign [játékbeli neved]\` parancsot a hozzáadáshoz.`, ephemeral: true });
             }
-        } catch (err) {
-            console.error("Database Error during !myign:", err);
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) lekérdezésekor. Próbáld újra később.");
-        }
-    }
 
-    // !removeign command
-    else if (command === 'removeign') {
-        const query = 'DELETE FROM user_igns WHERE user_id = $1;';
-        const values = [userId];
-
-        try {
+        } else if (commandName === 'removeign') {
+            const query = 'DELETE FROM user_igns WHERE user_id = $1;';
+            const values = [userId];
             const result = await pool.query(query, values);
+
             if (result.rowCount > 0) {
-                console.log(`Database: Removed IGN for ${message.author.tag}`);
-                return message.reply("✅ A játékbeli neved (IGN) eltávolítva.");
+                console.log(`Database: Removed IGN for ${interaction.user.tag}`);
+                await interaction.reply({ content: "✅ A játékbeli neved (IGN) eltávolítva.", ephemeral: true });
             } else {
-                return message.reply("Jelenleg nincs játékbeli neved (IGN) regisztrálva, amit eltávolíthatnál.");
+                await interaction.reply({ content: "Jelenleg nincs játékbeli neved (IGN) regisztrálva, amit eltávolíthatnál.", ephemeral: true });
             }
-        } catch (err) {
-            console.error("Database Error during !removeign:", err);
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) eltávolításakor. Próbáld újra később.");
-        }
-    }
 
-    // !status command
-    else if (command === 'status') {
-        return message.reply("A játék státuszát (hogy éppen online van-e) itt ellenőrizheted: https://status.bethesda.net/en");
-    }
+        } else if (commandName === '76event') {
+            const eventKey = interaction.options.getString('name', true); // Get the chosen event key (value from autocomplete)
+            const eventConfig = EVENTS_CONFIG[eventKey];
 
-    // --- Event Announce Command ---
-    else if (EVENTS_CONFIG[command]) {
-        const eventConfig = EVENTS_CONFIG[command];
-        const { eventName } = eventConfig;
-        let userIGN = null;
+            if (!eventConfig) {
+                // Should not happen with autocomplete, but good failsafe
+                console.error(`Invalid event key "${eventKey}" received for /event command.`);
+                await interaction.reply({ content: "❌ Hiba: Érvénytelen esemény lett kiválasztva.", ephemeral: true });
+                return;
+            }
+            const { eventName } = eventConfig;
 
-        // 1. Get User's IGN from DB
-        const getIgnQuery = 'SELECT ign FROM user_igns WHERE user_id = $1;';
-        const getIgnValues = [userId];
+            // 1. Get User's IGN
+            let userIGN = null;
+            const getIgnQuery = 'SELECT ign FROM user_igns WHERE user_id = $1;';
+            const getIgnValues = [userId];
+            const ignResult = await pool.query(getIgnQuery, getIgnValues);
 
-        try {
-            const result = await pool.query(getIgnQuery, getIgnValues);
-            if (result.rows.length > 0) {
-                userIGN = result.rows[0].ign;
+            if (ignResult.rows.length > 0) {
+                userIGN = ignResult.rows[0].ign;
             } else {
-                // User hasn't set an IGN
-                return message.reply(`Először állítsd be a játékbeli nevedet (IGN) a \`${PREFIX}addign [játékbeli neved]\` paranccsal, mielőtt eseményeket jelentesz.`);
+                await interaction.reply({ content: `Először állítsd be a játékbeli nevedet (IGN) a \`/addign [játékbeli neved]\` paranccsal, mielőtt eseményeket jelentesz.`, ephemeral: true });
+                return; // Stop processing
             }
-        } catch (err) {
-            console.error(`Database Error fetching IGN for event command !${command}:`, err);
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) ellenőrzésekor. Próbáld újra később.");
+
+            // 2. Find Role (Ensure guild context)
+            if (!interaction.inGuild()) {
+                 await interaction.reply({ content: "Ezt a parancsot csak szerveren belül lehet használni.", ephemeral: true });
+                 return;
+            }
+            const role = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === EVENT_ROLE_NAME.toLowerCase());
+
+            if (!role) {
+                console.error(`Configuration Error: Role "${EVENT_ROLE_NAME}" not found on server "${interaction.guild.name}" for command "/event"`);
+                await interaction.reply({ content: `❌ Hiba: A "${EVENT_ROLE_NAME}" szerepkör nem található ezen a szerveren. Kérlek kérdezd meg az adminisztrátort, hogy ellenőrizze a szerepkör nevét a bot konfigurációjában, vagy hozza létre a szerepkört.`, ephemeral: true });
+                return;
+            }
+
+            // 3. Send Notification (in the channel the command was used)
+            const notification = `Figyelem, <@&${role.id}>! ${interaction.user} szerverén éppen a **${eventName}** esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
+
+            try {
+                 // First reply to the interaction to acknowledge it
+                 await interaction.reply({ content: `✅ Értesítés elküldve a(z) **${eventName}** eseményről!`, ephemeral: true });
+                 // Then send the public notification in the same channel
+                 await interaction.channel.send(notification);
+                 console.log(`Sent notification for ${eventName} triggered by ${interaction.user.tag} (IGN: ${userIGN})`);
+            } catch (sendError) {
+                 console.error(`Discord API Error sending event notification for ${eventName}:`, sendError);
+                 // Try to follow up if the initial reply worked but send failed
+                 await interaction.followUp({ content: "❌ Sajnálom, nem tudtam elküldeni a nyilvános értesítést. Kérlek ellenőrizd a jogosultságaimat ebben a csatornában.", ephemeral: true }).catch(console.error);
+            }
         }
 
-        // 2. Find the Event Role
-        const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === EVENT_ROLE_NAME.toLowerCase());
-
-        if (!role) {
-            console.error(`Configuration Error: Role "${EVENT_ROLE_NAME}" not found on server "${message.guild.name}" for command "!${command}"`);
-            return message.reply(`❌ Hiba: A "${EVENT_ROLE_NAME}" szerepkör nem található ezen a szerveren. Kérlek kérdezd meg az adminisztrátort, hogy ellenőrizze a szerepkör nevét a bot konfigurációjában, vagy hozza létre a szerepkört.`);
-        }
-
-        // 3. Send Notification
-        const notification = `Figyelem, <@&${role.id}>! ${message.author} szerverén éppen a **${eventName}** esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
-
+    } catch (error) {
+        console.error(`Error handling interaction "${interaction.commandName}":`, error);
+        // Try to reply or follow up with an error message
+        const errorMessage = "❌ Hiba történt a parancs végrehajtása közben.";
         try {
-            await message.channel.send(notification);
-            console.log(`Sent notification for ${eventName} triggered by ${message.author.tag} (IGN: ${userIGN})`);
-            // Optional: Delete the triggering command message after success
-            // await message.delete().catch(console.error);
-        } catch (error) {
-            console.error(`Discord API Error sending event notification for ${eventName}:`, error);
-            // Inform the user if sending failed (e.g., permissions issue)
-            message.reply("❌ Sajnálom, nem tudtam elküldeni az értesítést. Kérlek ellenőrizd a jogosultságaimat ebben a csatornában.").catch(console.error); // Catch potential error replying
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: errorMessage, ephemeral: true });
+            } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+            }
+        } catch (replyError) {
+            console.error('Failed to send error reply to interaction:', replyError);
         }
-        return; // Stop further processing after handling the event command
     }
-
-    // Optional: Handle unknown commands if needed
-    // else {
-    //  message.reply(`Ismeretlen parancs: \`${PREFIX}${command}\`.`);
-    // }
 });
 
+
 // --- Keep-Alive Function ---
+// (Keep keepAlive function exactly as it was in the previous version)
 function keepAlive() {
-    const url = process.env.RENDER_EXTERNAL_URL; // Get the Render URL
+    const url = process.env.RENDER_EXTERNAL_URL;
     if (url) {
         console.log(`Setting up keep-alive pings to ${url}`);
         setInterval(async () => {
             try {
-                // Dynamically import node-fetch ONLY when needed
                 const fetch = (await import('node-fetch')).default;
                 const response = await fetch(url);
-                if (response.ok) {
-                    // Log less verbosely on success to keep logs cleaner
-                    // console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`);
-                } else {
-                    // Log errors clearly
+                if (!response.ok) {
                     console.error(`Keep-alive ping FAILED to ${url}. Status: ${response.status} ${response.statusText} at ${new Date().toISOString()}`);
                 }
             } catch (err) {
-                // Catch errors during import or fetch
                 console.error(`Error during keep-alive ping to ${url}:`, err);
             }
-        }, 5 * 60 * 1000); // Ping every 5 minutes
+        }, 5 * 60 * 1000);
     } else {
         console.warn('RENDER_EXTERNAL_URL is not set. Keep-alive pings are disabled.');
     }
 }
 
-
 // --- Basic HTTP Server for Health Checks ---
-const port = process.env.PORT || 8080; // Use Render's PORT or default
+// (Keep HTTP server exactly as it was in the previous version)
+const port = process.env.PORT || 8080;
 http.createServer((req, res) => {
-    // Respond positively to any request (usually Render's health check)
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('OK');
 }).listen(port, () => {
-    // Log only after the server is actually listening
     console.log(`HTTP server listening on port ${port} for health checks.`);
 });
 
@@ -316,27 +306,22 @@ http.createServer((req, res) => {
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
     console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
-    process.exit(1); // Exit if token is missing
+    process.exit(1);
 }
-
-// Login to Discord AFTER setting up HTTP server and DB checks
-client.login(token).then(() => {
-    // This confirmation now happens only if DB setup succeeds (due to logic in 'ready' event)
-    // console.log(`Successfully logged in to Discord as ${client.user.tag}`); // Moved to 'ready'
-}).catch(error => {
+client.login(token).catch(error => {
     console.error("FATAL ERROR: Failed to login to Discord:", error);
-    process.exit(1); // Exit if Discord login itself fails
+    process.exit(1);
 });
 
-// --- Graceful Shutdown (Optional but Recommended) ---
+// --- Graceful Shutdown ---
+// (Keep Graceful Shutdown handlers exactly as they were)
 process.on('SIGINT', async () => {
     console.log('Received SIGINT. Shutting down gracefully...');
-    await client.destroy(); // Close Discord connection
-    await pool.end(); // Close database connections
+    await client.destroy();
+    await pool.end();
     console.log('Shutdown complete.');
     process.exit(0);
 });
-
 process.on('SIGTERM', async () => {
     console.log('Received SIGTERM. Shutting down gracefully...');
     await client.destroy();
