@@ -1,12 +1,16 @@
 // Import necessary modules
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
-// Removed: const fetch = require('node-fetch'); // Don't require globally for v3+
+const cheerio = require('cheerio'); // Added for web scraping
+const http = require('http'); // Added for the basic HTTP server
 require('dotenv').config();
 
 // --- Configuration ---
 const PREFIX = '!';
 const EVENT_ROLE_NAME = 'Eventek';
+const BETHESDA_STATUS_URL = 'https://status.bethesda.net/en'; // Status page URL
+const TARGET_SERVICE_NAME = 'Fallout 76'; // Name to look for on the status page
+
 const EVENTS_CONFIG = {
     'rumble': { eventName: "Radiation Rumble" },
     'sand': { eventName: "Line In The Sand" },
@@ -84,6 +88,52 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message],
 });
 
+// --- Helper Function for Status Scraping ---
+async function getFallout76Status() {
+    try {
+        // Dynamically import node-fetch
+        const fetch = (await import('node-fetch')).default;
+        const response = await fetch(BETHESDA_STATUS_URL);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const html = await response.text();
+        const $ = cheerio.load(html);
+
+        let status = 'Status not found'; // Default status
+
+        // Find the component container for Fallout 76
+        // This selector might need adjustment if Bethesda changes their site structure.
+        // It looks for a span with class 'name' containing 'Fallout 76',
+        // then goes up to the parent container and finds the status span within it.
+        const componentContainer = $("span.name").filter(function() {
+            return $(this).text().trim() === TARGET_SERVICE_NAME;
+        }).closest('.component-inner-container'); // Adjust '.component-inner-container' if needed
+
+        if (componentContainer.length > 0) {
+            // Find the status text within that container
+            const statusElement = componentContainer.find('.component-status'); // Adjust '.component-status' if needed
+            if (statusElement.length > 0) {
+                status = statusElement.text().trim();
+            } else {
+                 console.warn(`Could not find status element within the container for ${TARGET_SERVICE_NAME}`);
+                 status = 'Could not determine status'; // More specific error
+            }
+        } else {
+             console.warn(`Could not find the component container for ${TARGET_SERVICE_NAME}`);
+             status = `${TARGET_SERVICE_NAME} not listed on status page`; // Service not found
+        }
+
+        return status;
+
+    } catch (error) {
+        console.error(`Error fetching or parsing Bethesda status page: ${error}`);
+        // Rethrow or return a specific error message
+        throw new Error('Failed to retrieve status from Bethesda page.');
+    }
+}
+
+
 // --- Bot Event Handlers ---
 
 client.on('ready', async () => {
@@ -100,8 +150,10 @@ client.on('ready', async () => {
 });
 
 client.on('messageCreate', async (message) => {
+    // Basic checks: ignore bots, DMs, messages without prefix
     if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
 
+    // Parse command and arguments
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     const userId = message.author.id;
@@ -111,156 +163,140 @@ client.on('messageCreate', async (message) => {
     if (command === 'addign') {
         const ign = args.join(' ');
         if (!ign) {
-            // return message.reply('Please provide your In-Game Name (IGN) after the command.\nExample: `!addign Your IGN Here`');
-            return message.reply('Kérlek add meg a játékban használt nevedet (IGN).\nPéldául: `!addign [játékbeli neved]`');
+            return message.reply('Please provide your In-Game Name (IGN) after the command.\nExample: `!addign Your IGN Here`');
         }
-
         const query = `
-            INSERT INTO user_igns (user_id, ign)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id) DO UPDATE SET
-                ign = EXCLUDED.ign,
-                last_updated = CURRENT_TIMESTAMP;
+            INSERT INTO user_igns (user_id, ign) VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET ign = EXCLUDED.ign, last_updated = CURRENT_TIMESTAMP;
         `;
-        const values = [userId, ign];
-
         try {
-            await pool.query(query, values);
+            await pool.query(query, [userId, ign]);
             console.log(`Database: Added/Updated IGN for ${message.author.tag}: ${ign}`);
-            // return message.reply(`✅ Your IGN has been successfully set/updated to: **${ign}**`);
-            return message.reply(`✅ A játékbeli neved (IGN) sikeresen hozzá lett adva/frissítve lett erre: **${ign}**`);
+            return message.reply(`✅ Your IGN has been successfully set/updated to: **${ign}**`);
         } catch (err) {
             console.error("Database Error during !addign:", err);
-            // return message.reply("❌ An error occurred while saving your IGN. Please try again later.");
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) mentésekor. Próbáld újra később.");
+            return message.reply("❌ An error occurred while saving your IGN. Please try again later.");
         }
     }
 
     else if (command === 'myign') {
         const query = 'SELECT ign FROM user_igns WHERE user_id = $1;';
-        const values = [userId];
-
         try {
-            const result = await pool.query(query, values);
+            const result = await pool.query(query, [userId]);
             if (result.rows.length > 0) {
-                const userIGN = result.rows[0].ign;
-                // return message.reply(`Your registered IGN is: **${userIGN}**`);
-                return message.reply(`A regisztrált játékbeli neved (IGN): **${userIGN}**`);
+                return message.reply(`Your registered IGN is: **${result.rows[0].ign}**`);
             } else {
-                // return message.reply(`You haven't registered an IGN yet. Use \`${PREFIX}addign [your IGN]\` to set one.`);
-                return message.reply(`Még nem adtál meg játékbeli nevet (IGN). Használd a \`${PREFIX}addign [játékbeli neved]\` parancsot a hozzáadáshoz.`);
+                return message.reply(`You haven't registered an IGN yet. Use \`${PREFIX}addign [your IGN]\` to set one.`);
             }
         } catch (err) {
             console.error("Database Error during !myign:", err);
-            // return message.reply("❌ An error occurred while retrieving your IGN. Please try again later.");
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) lekérdezésekor. Próbáld újra később.");
+            return message.reply("❌ An error occurred while retrieving your IGN. Please try again later.");
         }
     }
 
     else if (command === 'removeign') {
         const query = 'DELETE FROM user_igns WHERE user_id = $1;';
-        const values = [userId];
-
         try {
-            const result = await pool.query(query, values);
+            const result = await pool.query(query, [userId]);
             if (result.rowCount > 0) {
                 console.log(`Database: Removed IGN for ${message.author.tag}`);
-                //return message.reply("✅ Your registered IGN has been removed.");
-                return message.reply("✅ A játékbeli neved (IGN) eltávolítva.");
+                return message.reply("✅ Your registered IGN has been removed.");
             } else {
-                //return message.reply("You don't currently have an IGN registered to remove.");
-                return message.reply("Jelenleg nincs játékbeli neved (IGN) regisztrálva, amit eltávolíthatnál.");
+                return message.reply("You don't currently have an IGN registered to remove.");
             }
         } catch (err) {
             console.error("Database Error during !removeign:", err);
-            // return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) eltávolításakor. Próbáld újra később.");
+            return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
+        }
+    }
+
+    // --- NEW: Status Command ---
+    else if (command === 'status') {
+        try {
+            // Indicate the bot is working on it
+            await message.channel.sendTyping();
+            const status = await getFallout76Status();
+            return message.reply(`Current **${TARGET_SERVICE_NAME}** status: **${status}**\n(Source: ${BETHESDA_STATUS_URL})`);
+        } catch (error) {
+            console.error("Error executing !status command:", error);
+            return message.reply(`❌ Sorry, I couldn't retrieve the status for ${TARGET_SERVICE_NAME}. The status page might be unavailable or changed.\nError: ${error.message}`);
         }
     }
 
     // --- Event Announce Command ---
     else if (EVENTS_CONFIG[command]) {
         const eventConfig = EVENTS_CONFIG[command];
-        const { eventName } = eventConfig; //  Use the eventName
+        const { eventName } = eventConfig;
         let userIGN = null;
 
+        // Fetch IGN
         const getIgnQuery = 'SELECT ign FROM user_igns WHERE user_id = $1;';
-        const getIgnValues = [userId];
-
         try {
-            const result = await pool.query(getIgnQuery, getIgnValues);
+            const result = await pool.query(getIgnQuery, [userId]);
             if (result.rows.length > 0) {
                 userIGN = result.rows[0].ign;
             } else {
-                // return message.reply(`You need to set your IGN first using \`${PREFIX}addign [your IGN]\` before announcing events.`);
-                return message.reply(`Először állítsd be a játékbeli nevedet (IGN) a \`${PREFIX}addign [játékbeli neved]\` paranccsal, mielőtt eseményeket jelentesz.`);
+                return message.reply(`You need to set your IGN first using \`${PREFIX}addign [your IGN]\` before announcing events.`);
             }
         } catch (err) {
             console.error(`Database Error fetching IGN for event command !${command}:`, err);
-            // return message.reply("❌ An error occurred while checking your registered IGN. Please try again later.");
-            return message.reply("❌ Hiba történt a játékbeli neved (IGN) ellenőrzésekor. Próbáld újra később.");
+            return message.reply("❌ An error occurred while checking your registered IGN. Please try again later.");
         }
 
-        // Find the Eventek role
+        // Find the role
         const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === EVENT_ROLE_NAME.toLowerCase());
-
         if (!role) {
             console.error(`Configuration Error: Role "${EVENT_ROLE_NAME}" not found on server "${message.guild.name}" for command "!${command}"`);
-            // return message.reply(`❌ Error: The role "@${EVENT_ROLE_NAME}" was not found on this server. Please ask an admin to check the role name in the bot's configuration or create the role.`);
-            return message.reply(`❌ Hiba: A "${EVENT_ROLE_NAME}" szerepkör nem található ezen a szerveren. Kérlek kérdezd meg az adminisztrátort, hogy ellenőrizze a szerepkör nevét a bot konfigurációjában, vagy hozza létre a szerepkört.`);
+            return message.reply(`❌ Error: The role "@${EVENT_ROLE_NAME}" was not found. Please check the configuration or create the role.`);
         }
 
-        //const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
-        const notification = `Figyelem, <@&${role.id}>! ${message.author} szerverén éppen a ${eventName} esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
-
+        // Send notification
+        const notification = `Attention, <@&${role.id}>! ${message.author} has **${eventName}** active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
         try {
             await message.channel.send(notification);
             console.log(`Sent notification for ${eventName} triggered by ${message.author.tag}`);
         } catch (error) {
             console.error(`Discord API Error sending event notification for ${eventName}:`, error);
-            // message.reply("❌ Sorry, I couldn't send the notification message. Please check my permissions in this channel.");
-            message.reply("❌ Sajnálom, nem tudtam elküldeni az értesítést. Kérlek ellenőrizd a jogosultságaimat ebben a csatornában.");
+            message.reply("❌ Sorry, I couldn't send the notification message. Check my permissions.");
         }
-        return;
+        return; // Explicit return after handling the command
     }
 
-    // Optional: Handle unknown commands
+    // Optional: Handle unknown commands (uncomment if desired)
     // else {
-    //  message.reply(`Unknown command: \`${PREFIX}${command}\`. Try \`!addign\`, \`!myign\`, \`!removeign\`, or an event command like \`!rumble\`.`);
+    //     message.reply(`Unknown command: \`${PREFIX}${command}\`. Try \`!addign\`, \`!myign\`, \`!removeign\`, \`!status\`, or an event command like \`!rumble\`.`);
     // }
 });
 
-// --- Keep-Alive Function (FIXED) ---
+// --- Keep-Alive Function ---
 function keepAlive() {
-    const url = process.env.RENDER_EXTERNAL_URL; // Get the Render URL from the environment
+    const url = process.env.RENDER_EXTERNAL_URL;
     if (url) {
         console.log(`Setting up keep-alive pings to ${url}`);
-        setInterval(async () => { // Keep async here
+        setInterval(async () => {
             try {
-                // Dynamically import node-fetch within the async function
                 const fetch = (await import('node-fetch')).default;
-                const response = await fetch(url); // Now fetch should work
+                const response = await fetch(url);
                 if (response.ok) {
                     console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`);
                 } else {
                     console.error(`Failed to ping ${url}. Status code: ${response.status}`);
                 }
             } catch (err) {
-                // Catch errors during import or fetch
                 console.error(`Error pinging ${url}:`, err);
             }
-        }, 5 * 60 * 1000); // Ping every 5 minutes (in milliseconds)
+        }, 5 * 60 * 1000); // Ping every 5 minutes
     } else {
         console.warn('RENDER_EXTERNAL_URL is not set. Keep-alive pings are disabled.');
     }
 }
 
-
 // --- Login ---
 const token = process.env.DISCORD_TOKEN;
 const dbUrl = process.env.DATABASE_URL;
-const port = process.env.PORT || 8080; // Render usually sets PORT
+const port = process.env.PORT || 8080;
 
+// Check for essential environment variables
 if (!token) {
     console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
     process.exit(1);
@@ -270,8 +306,7 @@ if (!dbUrl) {
     process.exit(1);
 }
 
-// Basic HTTP server to respond to Render health checks
-const http = require('http');
+// Basic HTTP server for Render health checks
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('OK');
@@ -279,11 +314,10 @@ http.createServer((req, res) => {
      console.log(`HTTP server listening on port ${port} for health checks.`);
 });
 
-
 // Login to Discord AFTER setting up the HTTP server
 client.login(token).then(() => {
     console.log(`Successfully logged in to Discord as ${client.user.tag}`);
 }).catch(error => {
     console.error("FATAL ERROR: Failed to login to Discord:", error);
-    process.exit(1); // Exit if Discord login fails
+    process.exit(1);
 });
