@@ -88,47 +88,51 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message],
 });
 
-// --- Helper Function for Status Scraping ---
+// --- Helper Function for Status Scraping (REVISED SELECTORS) ---
 async function getFallout76Status() {
     try {
         // Dynamically import node-fetch
         const fetch = (await import('node-fetch')).default;
         const response = await fetch(BETHESDA_STATUS_URL);
         if (!response.ok) {
+            // Log the status code for better debugging
+            console.error(`Bethesda status page fetch failed with status: ${response.status}`);
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const html = await response.text();
         const $ = cheerio.load(html);
 
         let status = 'Status not found'; // Default status
+        let foundService = false;
 
-        // Find the component container for Fallout 76
-        // This selector might need adjustment if Bethesda changes their site structure.
-        // It looks for a span with class 'name' containing 'Fallout 76',
-        // then goes up to the parent container and finds the status span within it.
-        const componentContainer = $("span.name").filter(function() {
-            return $(this).text().trim() === TARGET_SERVICE_NAME;
-        }).closest('.component-inner-container'); // Adjust '.component-inner-container' if needed
-
-        if (componentContainer.length > 0) {
-            // Find the status text within that container
-            const statusElement = componentContainer.find('.component-status'); // Adjust '.component-status' if needed
-            if (statusElement.length > 0) {
-                status = statusElement.text().trim();
-            } else {
-                 console.warn(`Could not find status element within the container for ${TARGET_SERVICE_NAME}`);
-                 status = 'Could not determine status'; // More specific error
+        // Find the div containing the target service name
+        $('div').each(function() {
+            if ($(this).text().trim() === TARGET_SERVICE_NAME) {
+                foundService = true;
+                // Get the next sibling div which should contain the status
+                const statusElement = $(this).next('div'); // Find the immediate next sibling that is a div
+                if (statusElement.length > 0) {
+                    status = statusElement.text().trim();
+                } else {
+                    // This case might happen if the structure changes slightly
+                    console.warn(`Found '${TARGET_SERVICE_NAME}' but could not find the next sibling div for status.`);
+                    status = 'Could not determine status';
+                }
+                return false; // Stop iterating once found
             }
-        } else {
-             console.warn(`Could not find the component container for ${TARGET_SERVICE_NAME}`);
+        });
+
+        if (!foundService) {
+             console.warn(`Could not find the div containing text '${TARGET_SERVICE_NAME}' on the status page.`);
              status = `${TARGET_SERVICE_NAME} not listed on status page`; // Service not found
         }
 
         return status;
 
     } catch (error) {
-        console.error(`Error fetching or parsing Bethesda status page: ${error}`);
-        // Rethrow or return a specific error message
+        // Log the specific error during fetch/parse
+        console.error(`Error in getFallout76Status function: ${error}`);
+        // Provide a user-friendly error message
         throw new Error('Failed to retrieve status from Bethesda page.');
     }
 }
@@ -210,16 +214,19 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // --- NEW: Status Command ---
+    // --- Status Command (Uses updated helper function) ---
     else if (command === 'status') {
         try {
             // Indicate the bot is working on it
             await message.channel.sendTyping();
             const status = await getFallout76Status();
-            return message.reply(`Current **${TARGET_SERVICE_NAME}** status: **${status}**\n(Source: ${BETHESDA_STATUS_URL})`);
+            // Provide a slightly more informative reply
+            return message.reply(`Bethesda Status Portal reports **${TARGET_SERVICE_NAME}** is currently: **${status}**\n(Source: ${BETHESDA_STATUS_URL})`);
         } catch (error) {
-            console.error("Error executing !status command:", error);
-            return message.reply(`❌ Sorry, I couldn't retrieve the status for ${TARGET_SERVICE_NAME}. The status page might be unavailable or changed.\nError: ${error.message}`);
+            // Log the error from the helper function if it was re-thrown
+            console.error("Error executing !status command:", error.message);
+            // Inform the user about the failure
+            return message.reply(`❌ Sorry, I couldn't retrieve the status for ${TARGET_SERVICE_NAME}. The status page might be unavailable, changed, or the service wasn't listed.`);
         }
     }
 
