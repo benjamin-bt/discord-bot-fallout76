@@ -4,36 +4,47 @@ const { Pool } = require('pg');
 // Removed: const fetch = require('node-fetch'); // Don't require globally for v3+
 require('dotenv').config();
 const axios = require('axios'); // For making HTTP requests
+const puppeteer = require('puppeteer'); // Puppeteer for web scraping
 
 // Function to scrape Fallout 76's status using Browserless
 async function getFallout76Status() {
-    const browserlessApiKey = process.env.BROWSERLESS_API_KEY; // Store your API key in .env
     const url = 'https://status.bethesda.net/en';
-
-    if (!browserlessApiKey) {
-        console.error("FATAL ERROR: BROWSERLESS_API_KEY environment variable not found.");
-        return 'Error: Missing API key for Browserless.';
-    }
+    let browser;
 
     try {
-        const response = await axios.post(`https://chrome.browserless.io/content?token=${browserlessApiKey}`, {
-            url: url,
-            waitFor: '.component-container', // Wait for the status elements to load
+        // Launch Puppeteer in headless mode with minimal resources
+        browser = await puppeteer.launch({
+            headless: true,
+            args: [
+                '--no-sandbox', // Required for Render
+                '--disable-setuid-sandbox', // Required for Render
+                '--disable-dev-shm-usage', // Reduce memory usage
+                '--disable-gpu', // Disable GPU acceleration
+                '--no-zygote', // Reduce resource usage
+            ],
         });
 
-        const html = response.data;
-        const $ = require('cheerio').load(html); // Use Cheerio to parse the loaded HTML
+        const page = await browser.newPage();
+        await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-        // Find the Fallout 76 status element
-        const fallout76Element = $('.component-container')
-            .filter((_, el) => $(el).text().includes('Fallout 76'))
-            .first();
+        // Wait for the Fallout 76 status element to load
+        await page.waitForSelector('.component-container');
 
-        const status = fallout76Element.find('.component-status').text().trim();
-        return status || 'Unknown';
+        // Extract the status of Fallout 76
+        const status = await page.evaluate(() => {
+            const fallout76Element = Array.from(document.querySelectorAll('.component-container'))
+                .find(el => el.textContent.includes('Fallout 76'));
+            return fallout76Element
+                ? fallout76Element.querySelector('.component-status').textContent.trim()
+                : 'Unknown';
+        });
+
+        return status;
     } catch (error) {
-        console.error('Error scraping Fallout 76 status:', error);
+        console.error('Error scraping Fallout 76 status with Puppeteer:', error);
         return 'Error retrieving status';
+    } finally {
+        if (browser) await browser.close();
     }
 }
 
