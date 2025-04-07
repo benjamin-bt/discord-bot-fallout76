@@ -1,8 +1,9 @@
 // Import necessary modules
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
-const cheerio = require('cheerio'); // Added for web scraping
-const http = require('http'); // Added for the basic HTTP server
+// Removed: const cheerio = require('cheerio');
+const http = require('http');
+const puppeteer = require('puppeteer'); // Added Puppeteer
 require('dotenv').config();
 
 // --- Configuration ---
@@ -10,6 +11,22 @@ const PREFIX = '!';
 const EVENT_ROLE_NAME = 'Eventek';
 const BETHESDA_STATUS_URL = 'https://status.bethesda.net/en'; // Status page URL
 const TARGET_SERVICE_NAME = 'Fallout 76'; // Name to look for on the status page
+
+// Puppeteer launch options (important for Render/Docker environments)
+const puppeteerOptions = {
+  headless: true, // Run in headless mode (no visible browser window)
+  args: [
+    '--no-sandbox', // Required for running in many container/server environments
+    '--disable-setuid-sandbox', // Additional sandbox flag
+    '--disable-dev-shm-usage', // Prevent /dev/shm usage issues in some environments
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--no-zygote',
+    // '--single-process', // Uncomment if memory issues persist, but can cause instability
+    '--disable-gpu' // Often needed in server environments
+  ]
+};
+
 
 const EVENTS_CONFIG = {
     'rumble': { eventName: "Radiation Rumble" },
@@ -88,81 +105,75 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message],
 });
 
-// --- Helper Function for Status Scraping (ADDED HTML LOGGING) ---
+// --- Helper Function for Status Scraping (USING PUPPETEER) ---
 async function getFallout76Status() {
+    let browser = null; // Define browser outside try block for finally scope
+    console.log('Launching Puppeteer browser...');
     try {
-        // Dynamically import node-fetch
-        const fetch = (await import('node-fetch')).default;
-        console.log(`Fetching status from: ${BETHESDA_STATUS_URL}`); // Log URL
-        const response = await fetch(BETHESDA_STATUS_URL, {
-             // Add a common User-Agent header to mimic a browser, might help bypass simple blocks
-             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-             }
-        });
+        browser = await puppeteer.launch(puppeteerOptions);
+        const page = await browser.newPage();
 
-        console.log(`Fetch response status: ${response.status}`); // Log response status
+        // Set a common User-Agent
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
 
-        if (!response.ok) {
-            console.error(`Bethesda status page fetch failed with status: ${response.status}`);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const html = await response.text();
+        console.log(`Navigating to: ${BETHESDA_STATUS_URL}`);
+        // Navigate and wait for the network to be mostly idle, indicating JS likely finished
+        await page.goto(BETHESDA_STATUS_URL, { waitUntil: 'networkidle2', timeout: 60000 }); // Increased timeout to 60s
 
-        // --- DEBUGGING: Log the received HTML ---
-        console.log('--- BEGIN Fetched HTML ---');
-        console.log(html); // Log the entire HTML content
-        console.log('--- END Fetched HTML ---');
-        // --- END DEBUGGING ---
+        console.log('Page loaded, evaluating content...');
 
-        const $ = cheerio.load(html);
+        // Use page.evaluate to run code within the browser context
+        const status = await page.evaluate((targetServiceName) => {
+            let foundStatus = 'Status not found'; // Default inside evaluate
+            let serviceFound = false;
 
-        let status = 'Status not found'; // Default status
-        let foundService = false;
+            // Select all divs that are direct children of elements with class 'status-container'
+            // This matches the structure: <div class="status-container"><div>Name</div><div>Status</div></div>
+            const nameDivs = document.querySelectorAll('.status-container > div:first-child');
 
-        // Find the div containing the target service name
-        // Using includes() for slightly looser matching, just in case of extra whitespace/chars
-        $('div').each(function() {
-            const currentText = $(this).text().trim();
-            // --- DEBUGGING: Log text being checked ---
-            // console.log(`Checking div text: "${currentText}"`); // Uncomment for very verbose logging
-            // --- END DEBUGGING ---
-
-            if (currentText === TARGET_SERVICE_NAME) { // Changed back to === for precision, rely on logged HTML first
-                console.log(`Found matching div for: ${TARGET_SERVICE_NAME}`); // Log success
-                foundService = true;
-                // Get the next sibling div which should contain the status
-                const statusElement = $(this).next('div'); // Find the immediate next sibling that is a div
-                if (statusElement.length > 0) {
-                    status = statusElement.text().trim();
-                    console.log(`Found status: ${status}`); // Log found status
-                } else {
-                    // This case might happen if the structure changes slightly
-                    console.warn(`Found '${TARGET_SERVICE_NAME}' but could not find the next sibling div for status.`);
-                    status = 'Could not determine status';
+            for (const div of nameDivs) {
+                if (div.textContent && div.textContent.trim() === targetServiceName) {
+                    serviceFound = true;
+                    // Get the next element sibling (should be the status div)
+                    const statusElement = div.nextElementSibling;
+                    if (statusElement && statusElement.textContent) {
+                        foundStatus = statusElement.textContent.trim();
+                    } else {
+                        foundStatus = 'Could not determine status';
+                    }
+                    break; // Stop searching once found
                 }
-                return false; // Stop iterating once found
             }
-        });
 
-        if (!foundService) {
-             console.warn(`Could not find the div containing text '${TARGET_SERVICE_NAME}' on the status page after checking fetched HTML.`);
-             status = `${TARGET_SERVICE_NAME} not listed on status page`; // Service not found
-        }
+             if (!serviceFound) {
+                foundStatus = `${targetServiceName} not listed on status page`;
+             }
 
+            return foundStatus; // Return the found status
+        }, TARGET_SERVICE_NAME); // Pass TARGET_SERVICE_NAME into evaluate
+
+        console.log(`Puppeteer evaluation completed. Found status: ${status}`);
         return status;
 
     } catch (error) {
-        // Log the specific error during fetch/parse
-        console.error(`Error in getFallout76Status function: ${error}`);
-        // Provide a user-friendly error message
-        throw new Error('Failed to retrieve status from Bethesda page.');
+        console.error(`Error during Puppeteer operation: ${error}`);
+        // Check for specific timeout errors
+        if (error.name === 'TimeoutError') {
+             throw new Error('Failed to load Bethesda status page within timeout.');
+        }
+        throw new Error('Failed to retrieve status using Puppeteer.'); // Generic error for other issues
+    } finally {
+        if (browser) {
+            console.log('Closing Puppeteer browser...');
+            await browser.close();
+        }
     }
 }
 
 
 // --- Bot Event Handlers ---
-
+// (No changes needed in client.on('ready') or client.on('messageCreate'))
+// ... (Keep the existing ready and messageCreate handlers as they were) ...
 client.on('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     try {
@@ -237,19 +248,20 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // --- Status Command (Uses updated helper function) ---
+    // --- Status Command (Uses Puppeteer helper function) ---
     else if (command === 'status') {
         try {
             // Indicate the bot is working on it
             await message.channel.sendTyping();
-            const status = await getFallout76Status();
+            console.log(`User ${message.author.tag} triggered !status command.`); // Log command trigger
+            const status = await getFallout76Status(); // This now uses Puppeteer
             // Provide a slightly more informative reply
             return message.reply(`Bethesda Status Portal reports **${TARGET_SERVICE_NAME}** is currently: **${status}**\n(Source: ${BETHESDA_STATUS_URL})`);
         } catch (error) {
             // Log the error from the helper function if it was re-thrown
-            console.error("Error executing !status command:", error.message);
+            console.error(`Error executing !status command for ${message.author.tag}:`, error.message);
             // Inform the user about the failure
-            return message.reply(`❌ Sorry, I couldn't retrieve the status for ${TARGET_SERVICE_NAME}. The status page might be unavailable, changed, or the service wasn't listed.`);
+            return message.reply(`❌ Sorry, I couldn't retrieve the status for ${TARGET_SERVICE_NAME}. There was an error interacting with the status page.`);
         }
     }
 
@@ -291,29 +303,27 @@ client.on('messageCreate', async (message) => {
         }
         return; // Explicit return after handling the command
     }
-
-    // Optional: Handle unknown commands (uncomment if desired)
-    // else {
-    //     message.reply(`Unknown command: \`${PREFIX}${command}\`. Try \`!addign\`, \`!myign\`, \`!removeign\`, \`!status\`, or an event command like \`!rumble\`.`);
-    // }
 });
 
+
 // --- Keep-Alive Function ---
+// (No changes needed)
 function keepAlive() {
     const url = process.env.RENDER_EXTERNAL_URL;
     if (url) {
         console.log(`Setting up keep-alive pings to ${url}`);
         setInterval(async () => {
             try {
+                // Keep using node-fetch for the simple keep-alive ping
                 const fetch = (await import('node-fetch')).default;
                 const response = await fetch(url);
                 if (response.ok) {
-                    console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`);
+                    // console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`); // Reduce log spam
                 } else {
-                    console.error(`Failed to ping ${url}. Status code: ${response.status}`);
+                    console.error(`Keep-alive ping failed to ${url}. Status code: ${response.status}`);
                 }
             } catch (err) {
-                console.error(`Error pinging ${url}:`, err);
+                console.error(`Error during keep-alive ping to ${url}:`, err);
             }
         }, 5 * 60 * 1000); // Ping every 5 minutes
     } else {
@@ -322,6 +332,7 @@ function keepAlive() {
 }
 
 // --- Login ---
+// (No changes needed)
 const token = process.env.DISCORD_TOKEN;
 const dbUrl = process.env.DATABASE_URL;
 const port = process.env.PORT || 8080;
