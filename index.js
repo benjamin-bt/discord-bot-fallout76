@@ -3,6 +3,39 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
 // Removed: const fetch = require('node-fetch'); // Don't require globally for v3+
 require('dotenv').config();
+const axios = require('axios'); // For making HTTP requests
+
+// Function to scrape Fallout 76's status using Browserless
+async function getFallout76Status() {
+    const browserlessApiKey = process.env.BROWSERLESS_API_KEY; // Store your API key in .env
+    const url = 'https://status.bethesda.net/en';
+
+    if (!browserlessApiKey) {
+        console.error("FATAL ERROR: BROWSERLESS_API_KEY environment variable not found.");
+        return 'Error: Missing API key for Browserless.';
+    }
+
+    try {
+        const response = await axios.post(`https://chrome.browserless.io/content?token=${browserlessApiKey}`, {
+            url: url,
+            waitFor: '.component-container', // Wait for the status elements to load
+        });
+
+        const html = response.data;
+        const $ = require('cheerio').load(html); // Use Cheerio to parse the loaded HTML
+
+        // Find the Fallout 76 status element
+        const fallout76Element = $('.component-container')
+            .filter((_, el) => $(el).text().includes('Fallout 76'))
+            .first();
+
+        const status = fallout76Element.find('.component-status').text().trim();
+        return status || 'Unknown';
+    } catch (error) {
+        console.error('Error scraping Fallout 76 status:', error);
+        return 'Error retrieving status';
+    }
+}
 
 // --- Configuration ---
 const PREFIX = '!';
@@ -175,6 +208,16 @@ client.on('messageCreate', async (message) => {
             console.error("Database Error during !removeign:", err);
             // return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) eltávolításakor. Próbáld újra később.");
+        }
+    }
+
+    else if (command === 'status') {
+        try {
+            const status = await getFallout76Status();
+            return message.reply(`Fallout 76 Status: **${status}**`);
+        } catch (error) {
+            console.error('Error handling !status command:', error);
+            return message.reply('❌ Hiba történt a Fallout 76 állapotának lekérdezésekor. Próbáld újra később.');
         }
     }
 
