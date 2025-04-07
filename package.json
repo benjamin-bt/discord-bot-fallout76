@@ -1,4 +1,8 @@
 {
+  "name": "discord-fallout-bot",
+  "version": "1.0.0",
+  "description": "Fallout 76 event announcer bot",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "register": "node deploy-commands.js",
