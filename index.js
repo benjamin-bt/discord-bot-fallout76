@@ -3,10 +3,11 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { Pool } = require('pg');
 // Removed: const fetch = require('node-fetch'); // Don't require globally for v3+
 require('dotenv').config();
+const http = require('http'); // Import http for the server
 
 // --- Configuration ---
 const PREFIX = '!';
-const EVENT_ROLE_NAME = 'Eventek';
+const EVENT_ROLE_NAME = 'Eventek'; // Make sure this matches the exact role name (case-sensitive)
 const EVENTS_CONFIG = {
     'rumble': { eventName: "Radiation Rumble" },
     'sand': { eventName: "Line In The Sand" },
@@ -17,7 +18,7 @@ const EVENTS_CONFIG = {
     'seismic': { eventName: "Seismic Activity" },
     'burden': { eventName: "Beasts of Burden" },
     'campfire': { eventName: "Campfire Tales" },
-    'caravan': { eventName: "Caravan Skyline Drive" },
+    'caravan': { eventName: "Caravan Skyline Drive" }, // Assuming this is the correct event name
     'pastimes': { eventName: "Dangerous Pastimes" },
     'guests': { eventName: "Distinguished Guests" },
     'encryptid': { eventName: "Encryptid" },
@@ -42,20 +43,38 @@ const EVENTS_CONFIG = {
 };
 
 // --- Database Setup ---
+const dbUrl = process.env.DATABASE_URL;
+if (!dbUrl) {
+    console.error("FATAL ERROR: DATABASE_URL environment variable not found.");
+    process.exit(1); // Exit if DB URL is missing
+}
+
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: dbUrl,
     ssl: {
-        rejectUnauthorized: false
-    }
+        rejectUnauthorized: false // Often required for cloud providers like Render/Heroku
+    },
+    // Optional: Add connection timeout (e.g., 10 seconds)
+    // connectionTimeoutMillis: 10000,
+    // Optional: Add statement timeout (e.g., 5 seconds)
+    // statement_timeout: 5000,
 });
 
 pool.on('error', (err, client) => {
+    // This catches errors on idle clients in the pool
     console.error('Unexpected error on idle database client', err);
+    // Consider whether to exit the process depending on the error severity
+    // process.exit(-1);
 });
 
+// --- Function to ensure the database table exists ---
 async function ensureTableExists() {
-    const client = await pool.connect();
+    let client; // Define client outside the try block to access it in finally
     try {
+        console.log("Attempting to connect to the database...");
+        client = await pool.connect(); // Attempt to get a client from the pool
+        console.log("Successfully connected to the database pool.");
+
         const createTableQuery = `
             CREATE TABLE IF NOT EXISTS user_igns (
                 user_id TEXT PRIMARY KEY,
@@ -63,13 +82,32 @@ async function ensureTableExists() {
                 last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
         `;
+        console.log("Executing CREATE TABLE IF NOT EXISTS query...");
         await client.query(createTableQuery);
         console.log("Database table 'user_igns' is ready.");
+
     } catch (err) {
-        console.error("Fatal Error: Could not ensure database table 'user_igns' exists:", err);
-        process.exit(1);
+        // Log the specific error encountered
+        console.error("Error during database setup (ensureTableExists):", err);
+        if (err.message.includes('terminat')) {
+             console.error("Detail: The connection was terminated. Check DB server status, network access, and DATABASE_URL.");
+        } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
+             console.error("Detail: Could not resolve or connect to the database host. Verify the hostname and port in DATABASE_URL.");
+        } else if (err.message.includes('password authentication failed')) {
+             console.error("Detail: Database authentication failed. Verify the username and password in DATABASE_URL.");
+        }
+        // Re-throw the error to be caught by the calling function (client.on('ready'))
+        // This ensures the bot doesn't continue in a broken state.
+        throw new Error(`Could not ensure database table 'user_igns' exists: ${err.message}`);
+
     } finally {
-        client.release();
+        // Ensure the client is released back to the pool if it was acquired
+        if (client) {
+            console.log("Releasing database client.");
+            client.release();
+        } else {
+             console.log("Database client was not acquired, nothing to release.");
+        }
     }
 }
 
@@ -79,9 +117,9 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMembers, // Keep GuildMembers if you need member info beyond the message context
     ],
-    partials: [Partials.Channel, Partials.Message],
+    partials: [Partials.Channel, Partials.Message], // Keep Partials if needed for older messages/DMs
 });
 
 // --- Bot Event Handlers ---
@@ -89,29 +127,33 @@ const client = new Client({
 client.on('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     try {
-        await ensureTableExists();
+        await ensureTableExists(); // Call the setup function
         console.log(`Bot is ready and listening for commands with prefix "${PREFIX}"`);
+        // Start the keep-alive function *after* successful DB setup and login
+        keepAlive();
     } catch (error) {
-        console.error("Error during bot readiness routine:", error);
+        // Catch the error thrown from ensureTableExists
+        console.error("FATAL: Bot readiness routine failed due to database setup error:", error);
+        // Exit the process because the bot cannot function without the database table
         process.exit(1);
     }
-    // Start the keep-alive function
-    keepAlive();
 });
 
 client.on('messageCreate', async (message) => {
+    // Ignore bots, DMs, and messages without the prefix
     if (message.author.bot || !message.guild || !message.content.startsWith(PREFIX)) return;
 
+    // Parse command and arguments
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     const userId = message.author.id;
 
     // --- Command Handling ---
 
+    // !addign command
     if (command === 'addign') {
         const ign = args.join(' ');
         if (!ign) {
-            // return message.reply('Please provide your In-Game Name (IGN) after the command.\nExample: `!addign Your IGN Here`');
             return message.reply('Kérlek add meg a játékban használt nevedet (IGN).\nPéldául: `!addign [játékbeli neved]`');
         }
 
@@ -125,17 +167,16 @@ client.on('messageCreate', async (message) => {
         const values = [userId, ign];
 
         try {
-            await pool.query(query, values);
+            await pool.query(query, values); // Use pool directly for queries
             console.log(`Database: Added/Updated IGN for ${message.author.tag}: ${ign}`);
-            // return message.reply(`✅ Your IGN has been successfully set/updated to: **${ign}**`);
             return message.reply(`✅ A játékbeli neved (IGN) sikeresen hozzá lett adva/frissítve lett erre: **${ign}**`);
         } catch (err) {
             console.error("Database Error during !addign:", err);
-            // return message.reply("❌ An error occurred while saving your IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) mentésekor. Próbáld újra később.");
         }
     }
 
+    // !myign command
     else if (command === 'myign') {
         const query = 'SELECT ign FROM user_igns WHERE user_id = $1;';
         const values = [userId];
@@ -144,19 +185,17 @@ client.on('messageCreate', async (message) => {
             const result = await pool.query(query, values);
             if (result.rows.length > 0) {
                 const userIGN = result.rows[0].ign;
-                // return message.reply(`Your registered IGN is: **${userIGN}**`);
                 return message.reply(`A regisztrált játékbeli neved (IGN): **${userIGN}**`);
             } else {
-                // return message.reply(`You haven't registered an IGN yet. Use \`${PREFIX}addign [your IGN]\` to set one.`);
                 return message.reply(`Még nem adtál meg játékbeli nevet (IGN). Használd a \`${PREFIX}addign [játékbeli neved]\` parancsot a hozzáadáshoz.`);
             }
         } catch (err) {
             console.error("Database Error during !myign:", err);
-            // return message.reply("❌ An error occurred while retrieving your IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) lekérdezésekor. Próbáld újra később.");
         }
     }
 
+    // !removeign command
     else if (command === 'removeign') {
         const query = 'DELETE FROM user_igns WHERE user_id = $1;';
         const values = [userId];
@@ -165,15 +204,12 @@ client.on('messageCreate', async (message) => {
             const result = await pool.query(query, values);
             if (result.rowCount > 0) {
                 console.log(`Database: Removed IGN for ${message.author.tag}`);
-                //return message.reply("✅ Your registered IGN has been removed.");
                 return message.reply("✅ A játékbeli neved (IGN) eltávolítva.");
             } else {
-                //return message.reply("You don't currently have an IGN registered to remove.");
                 return message.reply("Jelenleg nincs játékbeli neved (IGN) regisztrálva, amit eltávolíthatnál.");
             }
         } catch (err) {
             console.error("Database Error during !removeign:", err);
-            // return message.reply("❌ An error occurred while trying to remove your IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) eltávolításakor. Próbáld újra később.");
         }
     }
@@ -181,9 +217,10 @@ client.on('messageCreate', async (message) => {
     // --- Event Announce Command ---
     else if (EVENTS_CONFIG[command]) {
         const eventConfig = EVENTS_CONFIG[command];
-        const { eventName } = eventConfig; //  Use the eventName
+        const { eventName } = eventConfig;
         let userIGN = null;
 
+        // 1. Get User's IGN from DB
         const getIgnQuery = 'SELECT ign FROM user_igns WHERE user_id = $1;';
         const getIgnValues = [userId];
 
@@ -192,98 +229,113 @@ client.on('messageCreate', async (message) => {
             if (result.rows.length > 0) {
                 userIGN = result.rows[0].ign;
             } else {
-                // return message.reply(`You need to set your IGN first using \`${PREFIX}addign [your IGN]\` before announcing events.`);
+                // User hasn't set an IGN
                 return message.reply(`Először állítsd be a játékbeli nevedet (IGN) a \`${PREFIX}addign [játékbeli neved]\` paranccsal, mielőtt eseményeket jelentesz.`);
             }
         } catch (err) {
             console.error(`Database Error fetching IGN for event command !${command}:`, err);
-            // return message.reply("❌ An error occurred while checking your registered IGN. Please try again later.");
             return message.reply("❌ Hiba történt a játékbeli neved (IGN) ellenőrzésekor. Próbáld újra később.");
         }
 
-        // Find the Eventek role
+        // 2. Find the Event Role
         const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === EVENT_ROLE_NAME.toLowerCase());
 
         if (!role) {
             console.error(`Configuration Error: Role "${EVENT_ROLE_NAME}" not found on server "${message.guild.name}" for command "!${command}"`);
-            // return message.reply(`❌ Error: The role "@${EVENT_ROLE_NAME}" was not found on this server. Please ask an admin to check the role name in the bot's configuration or create the role.`);
             return message.reply(`❌ Hiba: A "${EVENT_ROLE_NAME}" szerepkör nem található ezen a szerveren. Kérlek kérdezd meg az adminisztrátort, hogy ellenőrizze a szerepkör nevét a bot konfigurációjában, vagy hozza létre a szerepkört.`);
         }
 
-        //const notification = `Attention, <@&${role.id}>! ${message.author} has ${eventName} active on their server!\nTheir IGN is **${userIGN}**. Feel free to join them!`;
-        const notification = `Figyelem, <@&${role.id}>! ${message.author} szerverén éppen a ${eventName} esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
+        // 3. Send Notification
+        const notification = `Figyelem, <@&${role.id}>! ${message.author} szerverén éppen a **${eventName}** esemény aktív!\nA játékbeli neve: **${userIGN}**. Nyugodtan csatlakozz hozzá!`;
 
         try {
             await message.channel.send(notification);
-            console.log(`Sent notification for ${eventName} triggered by ${message.author.tag}`);
+            console.log(`Sent notification for ${eventName} triggered by ${message.author.tag} (IGN: ${userIGN})`);
+            // Optional: Delete the triggering command message after success
+            // await message.delete().catch(console.error);
         } catch (error) {
             console.error(`Discord API Error sending event notification for ${eventName}:`, error);
-            // message.reply("❌ Sorry, I couldn't send the notification message. Please check my permissions in this channel.");
-            message.reply("❌ Sajnálom, nem tudtam elküldeni az értesítést. Kérlek ellenőrizd a jogosultságaimat ebben a csatornában.");
+            // Inform the user if sending failed (e.g., permissions issue)
+            message.reply("❌ Sajnálom, nem tudtam elküldeni az értesítést. Kérlek ellenőrizd a jogosultságaimat ebben a csatornában.").catch(console.error); // Catch potential error replying
         }
-        return;
+        return; // Stop further processing after handling the event command
     }
 
-    // Optional: Handle unknown commands
+    // Optional: Handle unknown commands if needed
     // else {
-    //  message.reply(`Unknown command: \`${PREFIX}${command}\`. Try \`!addign\`, \`!myign\`, \`!removeign\`, or an event command like \`!rumble\`.`);
+    //  message.reply(`Ismeretlen parancs: \`${PREFIX}${command}\`.`);
     // }
 });
 
-// --- Keep-Alive Function (FIXED) ---
+// --- Keep-Alive Function ---
 function keepAlive() {
-    const url = process.env.RENDER_EXTERNAL_URL; // Get the Render URL from the environment
+    const url = process.env.RENDER_EXTERNAL_URL; // Get the Render URL
     if (url) {
         console.log(`Setting up keep-alive pings to ${url}`);
-        setInterval(async () => { // Keep async here
+        setInterval(async () => {
             try {
-                // Dynamically import node-fetch within the async function
+                // Dynamically import node-fetch ONLY when needed
                 const fetch = (await import('node-fetch')).default;
-                const response = await fetch(url); // Now fetch should work
+                const response = await fetch(url);
                 if (response.ok) {
-                    console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`);
+                    // Log less verbosely on success to keep logs cleaner
+                    // console.log(`Pinged ${url} successfully at ${new Date().toISOString()}`);
                 } else {
-                    console.error(`Failed to ping ${url}. Status code: ${response.status}`);
+                    // Log errors clearly
+                    console.error(`Keep-alive ping FAILED to ${url}. Status: ${response.status} ${response.statusText} at ${new Date().toISOString()}`);
                 }
             } catch (err) {
                 // Catch errors during import or fetch
-                console.error(`Error pinging ${url}:`, err);
+                console.error(`Error during keep-alive ping to ${url}:`, err);
             }
-        }, 5 * 60 * 1000); // Ping every 5 minutes (in milliseconds)
+        }, 5 * 60 * 1000); // Ping every 5 minutes
     } else {
         console.warn('RENDER_EXTERNAL_URL is not set. Keep-alive pings are disabled.');
     }
 }
 
 
-// --- Login ---
-const token = process.env.DISCORD_TOKEN;
-const dbUrl = process.env.DATABASE_URL;
-const port = process.env.PORT || 8080; // Render usually sets PORT
-
-if (!token) {
-    console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
-    process.exit(1);
-}
-if (!dbUrl) {
-    console.error("FATAL ERROR: DATABASE_URL environment variable not found.");
-    process.exit(1);
-}
-
-// Basic HTTP server to respond to Render health checks
-const http = require('http');
+// --- Basic HTTP Server for Health Checks ---
+const port = process.env.PORT || 8080; // Use Render's PORT or default
 http.createServer((req, res) => {
+    // Respond positively to any request (usually Render's health check)
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('OK');
 }).listen(port, () => {
-     console.log(`HTTP server listening on port ${port} for health checks.`);
+    // Log only after the server is actually listening
+    console.log(`HTTP server listening on port ${port} for health checks.`);
 });
 
 
-// Login to Discord AFTER setting up the HTTP server
+// --- Login to Discord ---
+const token = process.env.DISCORD_TOKEN;
+if (!token) {
+    console.error("FATAL ERROR: DISCORD_TOKEN environment variable not found.");
+    process.exit(1); // Exit if token is missing
+}
+
+// Login to Discord AFTER setting up HTTP server and DB checks
 client.login(token).then(() => {
-    console.log(`Successfully logged in to Discord as ${client.user.tag}`);
+    // This confirmation now happens only if DB setup succeeds (due to logic in 'ready' event)
+    // console.log(`Successfully logged in to Discord as ${client.user.tag}`); // Moved to 'ready'
 }).catch(error => {
     console.error("FATAL ERROR: Failed to login to Discord:", error);
-    process.exit(1); // Exit if Discord login fails
+    process.exit(1); // Exit if Discord login itself fails
+});
+
+// --- Graceful Shutdown (Optional but Recommended) ---
+process.on('SIGINT', async () => {
+    console.log('Received SIGINT. Shutting down gracefully...');
+    await client.destroy(); // Close Discord connection
+    await pool.end(); // Close database connections
+    console.log('Shutdown complete.');
+    process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+    console.log('Received SIGTERM. Shutting down gracefully...');
+    await client.destroy();
+    await pool.end();
+    console.log('Shutdown complete.');
+    process.exit(0);
 });
