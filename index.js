@@ -88,31 +88,54 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message],
 });
 
-// --- Helper Function for Status Scraping (REVISED SELECTORS) ---
+// --- Helper Function for Status Scraping (ADDED HTML LOGGING) ---
 async function getFallout76Status() {
     try {
         // Dynamically import node-fetch
         const fetch = (await import('node-fetch')).default;
-        const response = await fetch(BETHESDA_STATUS_URL);
+        console.log(`Fetching status from: ${BETHESDA_STATUS_URL}`); // Log URL
+        const response = await fetch(BETHESDA_STATUS_URL, {
+             // Add a common User-Agent header to mimic a browser, might help bypass simple blocks
+             headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+             }
+        });
+
+        console.log(`Fetch response status: ${response.status}`); // Log response status
+
         if (!response.ok) {
-            // Log the status code for better debugging
             console.error(`Bethesda status page fetch failed with status: ${response.status}`);
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const html = await response.text();
+
+        // --- DEBUGGING: Log the received HTML ---
+        console.log('--- BEGIN Fetched HTML ---');
+        console.log(html); // Log the entire HTML content
+        console.log('--- END Fetched HTML ---');
+        // --- END DEBUGGING ---
+
         const $ = cheerio.load(html);
 
         let status = 'Status not found'; // Default status
         let foundService = false;
 
         // Find the div containing the target service name
+        // Using includes() for slightly looser matching, just in case of extra whitespace/chars
         $('div').each(function() {
-            if ($(this).text().trim() === TARGET_SERVICE_NAME) {
+            const currentText = $(this).text().trim();
+            // --- DEBUGGING: Log text being checked ---
+            // console.log(`Checking div text: "${currentText}"`); // Uncomment for very verbose logging
+            // --- END DEBUGGING ---
+
+            if (currentText === TARGET_SERVICE_NAME) { // Changed back to === for precision, rely on logged HTML first
+                console.log(`Found matching div for: ${TARGET_SERVICE_NAME}`); // Log success
                 foundService = true;
                 // Get the next sibling div which should contain the status
                 const statusElement = $(this).next('div'); // Find the immediate next sibling that is a div
                 if (statusElement.length > 0) {
                     status = statusElement.text().trim();
+                    console.log(`Found status: ${status}`); // Log found status
                 } else {
                     // This case might happen if the structure changes slightly
                     console.warn(`Found '${TARGET_SERVICE_NAME}' but could not find the next sibling div for status.`);
@@ -123,7 +146,7 @@ async function getFallout76Status() {
         });
 
         if (!foundService) {
-             console.warn(`Could not find the div containing text '${TARGET_SERVICE_NAME}' on the status page.`);
+             console.warn(`Could not find the div containing text '${TARGET_SERVICE_NAME}' on the status page after checking fetched HTML.`);
              status = `${TARGET_SERVICE_NAME} not listed on status page`; // Service not found
         }
 
