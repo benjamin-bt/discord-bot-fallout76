@@ -5,7 +5,6 @@ require('dotenv').config();
 const http = require('http');
 
 // --- Configuration ---
-// REMOVED: const PREFIX = '!'; // Prefix is no longer needed
 const EVENT_ROLE_NAME = 'Eventek'; // Make sure this matches the exact role name (case-sensitive)
 const EVENTS_CONFIG = { // Keep this config for event details and autocomplete
     'rumble': { eventName: "Radiation Rumble" },
@@ -100,11 +99,11 @@ async function ensureTableExists() {
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        // GatewayIntentBits.GuildMessages, // Less crucial now, interactions are primary
-        // GatewayIntentBits.MessageContent, // Not needed for slash commands
-        GatewayIntentBits.GuildMembers, // Still useful for getting member info if needed
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent, 
+        GatewayIntentBits.GuildMembers,
     ],
-    partials: [Partials.Channel], // Partials might be less needed now
+    partials: [Partials.Channel],
 });
 
 // --- Bot Event Handlers ---
