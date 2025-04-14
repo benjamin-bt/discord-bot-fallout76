@@ -28,6 +28,7 @@ const EVENTS_CONFIG = { // Keep this config for event details and autocomplete
     'lode': { eventName: "Lode Baring" },
     'jamboree': { eventName: "Moonshine Jamboree" },
     'mostwanted': { eventName: "Most Wanted" },
+    'mothman': { eventName: "Mothman Equinox" },
     'violent': { eventName: "One Violent Night" },
     'paradise': { eventName: "Project Paradise" },
     'safe': { eventName: "Safe and Sound" },
